@@ -48,3 +48,25 @@ def test_notebook_code_cells_have_valid_python_syntax() -> None:
     for index, cell in enumerate(notebook["cells"]):
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), f"cellule_{index}", "exec")
+
+
+def test_notebook_exposes_the_business_acceptance_gate() -> None:
+    notebook = _load_notebook()
+    markdown = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "markdown"
+    )
+    code = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+
+    assert "50 % de précision" in markdown
+    assert "20 % des retards" in markdown
+    assert "5 à 10 %" in markdown
+    assert "business_gate" in code
+    assert "alert_coverage" in code
+    assert "prediction_publishable" in code
+    assert "Aucune alerte publiable" in code

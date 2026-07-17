@@ -14,6 +14,11 @@ from flight_delays.historical import (
     add_historical_features,
     add_profile_values,
 )
+from flight_delays.schedule import (
+    SCHEDULE_FEATURES,
+    add_schedule_profile_values,
+    add_scheduled_congestion_features,
+)
 
 
 DELAY_THRESHOLD_MINUTES = 15
@@ -38,7 +43,7 @@ BASE_NUMERIC_FEATURES = [
     "distance",
 ]
 
-NUMERIC_FEATURES = BASE_NUMERIC_FEATURES + HISTORICAL_FEATURES
+NUMERIC_FEATURES = BASE_NUMERIC_FEATURES + SCHEDULE_FEATURES + HISTORICAL_FEATURES
 
 CATEGORICAL_FEATURES = [
     "op_unique_carrier",
@@ -112,9 +117,10 @@ RAW_ML_COLUMNS = [
 
 @dataclass(frozen=True)
 class TemporalSplit:
-    """Contient les trois sous-ensembles chronologiques."""
+    """Contient les quatre sous-ensembles chronologiques."""
 
     train: pd.DataFrame
+    tuning: pd.DataFrame
     validation: pd.DataFrame
     test: pd.DataFrame
 
@@ -177,9 +183,9 @@ def load_ml_data(
             .cast(pl.String)
             .alias("flight_number"),
             pl.concat_str(["origin", "dest"], separator="-").alias("route"),
-            pl.concat_str(
-                ["op_unique_carrier", "origin", "dest"], separator="-"
-            ).alias("carrier_route"),
+            pl.concat_str(["op_unique_carrier", "origin", "dest"], separator="-").alias(
+                "carrier_route"
+            ),
             pl.concat_str(
                 ["origin", (departure_minutes // 60).cast(pl.String)],
                 separator="-",
@@ -191,24 +197,14 @@ def load_ml_data(
             (pl.col("day_of_week") >= 6).cast(pl.Int8).alias("is_weekend"),
             (two_pi * (pl.col("month") - 1) / 12).sin().alias("month_sin"),
             (two_pi * (pl.col("month") - 1) / 12).cos().alias("month_cos"),
-            (two_pi * (pl.col("day_of_week") - 1) / 7)
-            .sin()
-            .alias("day_of_week_sin"),
-            (two_pi * (pl.col("day_of_week") - 1) / 7)
-            .cos()
-            .alias("day_of_week_cos"),
-            (two_pi * departure_minutes / 1440)
-            .sin()
-            .alias("departure_time_sin"),
-            (two_pi * departure_minutes / 1440)
-            .cos()
-            .alias("departure_time_cos"),
+            (two_pi * (pl.col("day_of_week") - 1) / 7).sin().alias("day_of_week_sin"),
+            (two_pi * (pl.col("day_of_week") - 1) / 7).cos().alias("day_of_week_cos"),
+            (two_pi * departure_minutes / 1440).sin().alias("departure_time_sin"),
+            (two_pi * departure_minutes / 1440).cos().alias("departure_time_cos"),
             (two_pi * arrival_minutes / 1440).sin().alias("arrival_time_sin"),
             (two_pi * arrival_minutes / 1440).cos().alias("arrival_time_cos"),
             pl.col("month").cast(pl.String).alias("month_category"),
-            pl.col("day_of_week")
-            .cast(pl.String)
-            .alias("day_of_week_category"),
+            pl.col("day_of_week").cast(pl.String).alias("day_of_week_category"),
             (pl.col("arr_delay") >= DELAY_THRESHOLD_MINUTES)
             .cast(pl.Int8)
             .alias("is_delayed_15"),
@@ -216,9 +212,7 @@ def load_ml_data(
             (pl.col("carrier_delay") > 0).cast(pl.Int8).alias("reason_carrier"),
             (pl.col("weather_delay") > 0).cast(pl.Int8).alias("reason_weather"),
             (pl.col("nas_delay") > 0).cast(pl.Int8).alias("reason_nas"),
-            (pl.col("security_delay") > 0)
-            .cast(pl.Int8)
-            .alias("reason_security"),
+            (pl.col("security_delay") > 0).cast(pl.Int8).alias("reason_security"),
         )
         .with_columns(
             pl.col("flight_date").dt.ordinal_day().alias("day_of_year"),
@@ -233,6 +227,7 @@ def load_ml_data(
         )
         .collect(engine="streaming")
     )
+    prepared = add_scheduled_congestion_features(prepared, path)
     prepared = add_historical_features(prepared, path).select(
         "flight_date",
         "month",
@@ -246,19 +241,26 @@ def load_ml_data(
 
 
 def split_temporally(data: pd.DataFrame) -> TemporalSplit:
-    """Sépare janvier-août, septembre-octobre et novembre-décembre."""
+    """Sépare entraînement, early stopping, choix du seuil et test final."""
 
-    train = data.loc[data["month"] <= 8].copy()
+    train = data.loc[data["month"] <= 7].copy()
+    tuning = data.loc[data["month"] == 8].copy()
     validation = data.loc[data["month"].between(9, 10)].copy()
     test = data.loc[data["month"] >= 11].copy()
-    if train.empty or validation.empty or test.empty:
+    if train.empty or tuning.empty or validation.empty or test.empty:
         raise ValueError("Le découpage chronologique a produit un ensemble vide.")
-    return TemporalSplit(train=train, validation=validation, test=test)
+    return TemporalSplit(
+        train=train,
+        tuning=tuning,
+        validation=validation,
+        test=test,
+    )
 
 
 def prepare_prediction_frame(
     flight: dict[str, object],
     history_profiles: dict | None = None,
+    schedule_profiles: dict | None = None,
 ) -> pd.DataFrame:
     """Applique à un futur vol les mêmes transformations que pendant l'entraînement."""
 
@@ -285,7 +287,9 @@ def prepare_prediction_frame(
     try:
         flight_date = date.fromisoformat(str(flight["flight_date"]))
     except ValueError as error:
-        raise ValueError("La date du vol doit respecter le format YYYY-MM-DD.") from error
+        raise ValueError(
+            "La date du vol doit respecter le format YYYY-MM-DD."
+        ) from error
     month = int(flight["month"])
     day_of_month = int(flight["day_of_month"])
     day_of_week = int(flight["day_of_week"])
@@ -297,7 +301,9 @@ def prepare_prediction_frame(
         raise ValueError("La date ne correspond pas au jour de la semaine fourni.")
     for label, value in (("départ", departure), ("arrivée", arrival)):
         if value != 2400 and not (0 <= value <= 2359 and value % 100 <= 59):
-            raise ValueError(f"L'heure prévue de {label} doit respecter le format HHMM.")
+            raise ValueError(
+                f"L'heure prévue de {label} doit respecter le format HHMM."
+            )
     if float(flight["crs_elapsed_time"]) <= 0:
         raise ValueError("La durée prévue doit être strictement positive.")
     if float(flight["distance"]) < 0:
@@ -347,5 +353,6 @@ def prepare_prediction_frame(
         "month_category": str(month),
         "day_of_week_category": str(day_of_week),
     }
+    add_schedule_profile_values(row, flight, schedule_profiles)
     add_profile_values(row, flight, history_profiles)
     return pd.DataFrame([row], columns=FEATURE_COLUMNS)

@@ -14,8 +14,8 @@ les rapports et la documentation sont en français.
 |---|---|---|
 | 1. Parsing PySpark | Terminé | Échantillon reproductible de 10 000 vols, typage, contrôles qualité et Parquet |
 | 2. Analyse PySpark | Terminé | Statistiques, valeurs manquantes, agrégations, causes et corrélations de Pearson |
-| 3. Machine learning Python | Modèle amélioré | Historiques sans fuite, CatBoost, classification, régression, causes, évaluation et prédiction |
-| 4. Visualisation Jupyter | Terminé | Graphiques, explorateur filtrable et formulaire de prédiction dans le notebook |
+| 3. Machine learning Python | Prototype non publiable | Congestion planifiée, historiques sans fuite, CatBoost et business gate strict |
+| 4. Visualisation Jupyter | Terminé | Graphiques, explorateur, métriques métier et diagnostics bloqués si le gate échoue |
 
 Le parcours complet se trouve dans le
 [notebook principal](notebooks/flight_delay_pipeline.ipynb). Les résultats sont
@@ -58,8 +58,11 @@ Le parcours complet se trouve dans le
 - parcours du CSV complet avec Polars en mode streaming, sans Spark ;
 - échantillonnage déterministe configurable, fixé à 10 % pour la baseline ;
 - exclusion des vols annulés, déroutés ou sans retard d'arrivée connu ;
-- découpage chronologique : janvier-août pour l'entraînement,
-  septembre-octobre pour la validation et novembre-décembre pour le test ;
+- découpage chronologique : janvier-juillet pour l'entraînement, août pour
+  l'early stopping, septembre-octobre pour le seuil et novembre-décembre pour
+  le test ;
+- six volumes de congestion calculés sur le planning complet avant
+  échantillonnage, sans résultat réel du vol ;
 - 68 features historiques calculées uniquement sur les jours antérieurs ;
 - historiques glissants du réseau, de la compagnie, des aéroports et de la route ;
 - fréquence, volume et gravité récente des perturbations ;
@@ -68,7 +71,12 @@ Le parcours complet se trouve dans le
 - régression conditionnelle du nombre de minutes avec `CatBoostRegressor` ;
 - quatre classifications conditionnelles pour les causes `carrier`, `weather`,
   `nas` et `security` ;
-- seuils de décision choisis sur la validation en maximisant le score F1 ;
+- seuil principal choisi uniquement sur septembre-octobre avec trois objectifs :
+  précision d'au moins 50 %, rappel d'au moins 20 % et 5 à 10 % d'alertes ;
+- bornes basses de Wilson à 95 %, support minimal de 500 alertes et contrôle
+  séparé de novembre et décembre ;
+- seuil de repli conservateur si le contrat est impossible, sans jamais valider
+  le modèle dans ce cas ;
 - métriques de classification, régression, confusion, baselines naïves et
   importance des features ;
 - sauvegarde locale des modèles, historiques récents et métadonnées avec Joblib ;
@@ -81,10 +89,12 @@ Le parcours complet se trouve dans le
 - tableaux des indicateurs, valeurs manquantes, causes et corrélations ;
 - graphiques sur les mois, compagnies, aéroports, statuts et retards ;
 - explorateur interactif des 10 000 vols avec filtres ;
-- entraînement ML actif sur 10 % du CSV complet, avec mode démonstration
-  configurable ;
-- métriques, matrice de confusion et importance des features ;
-- formulaire modifiable pour prédire un futur vol.
+- entraînement ML reproductible sur 10 % du CSV complet, avec mode démonstration
+  configurable et rechargement d'un artefact v5 compatible ;
+- métriques métier, stabilité mensuelle, matrice de confusion et importance des
+  features ;
+- formulaire modifiable pour produire un diagnostic de futur vol ; aucune alerte
+  n'est publiée si le gate ou le contexte du planning exact manque.
 
 ## Colonnes et features ajoutées
 
@@ -107,6 +117,20 @@ la distance.
 Les features catégorielles comprennent la compagnie, le numéro de vol, les
 aéroports et États, la route, la combinaison compagnie-route, les heures et les
 combinaisons aéroport-heure. CatBoost les traite directement.
+
+Les six features de congestion planifiée sont :
+
+- `origin_scheduled_departures_hour` et
+  `origin_scheduled_departures_3h` ;
+- `dest_scheduled_arrivals_hour` et `dest_scheduled_arrivals_3h` ;
+- `route_scheduled_flights_day` ;
+- `carrier_origin_scheduled_flights_day`.
+
+Elles comptent tous les vols prévus, y compris les vols ensuite annulés ou
+déroutés, car le planning est connu avant le départ. Pour un diagnostic isolé,
+l'artefact fournit des profils typiques par saison, jour et créneau. Ceux-ci ne
+suffisent toutefois pas à publier une alerte : l'application finale devra fournir
+automatiquement les six volumes exacts du planning du jour.
 
 Les 68 features historiques décrivent les 1, 3, 7, 14 ou 28 jours précédents,
 selon le groupe : taux de retard, taux de perturbation, nombre de vols et durée
@@ -142,6 +166,7 @@ cibles d'entraînement.
 │   ├── parsing.py                            # étape 1, PySpark
 │   ├── analysis.py                           # étape 2, PySpark
 │   ├── ml_data.py                            # chargement et features Python
+│   ├── schedule.py                           # congestion du planning et profils
 │   ├── historical.py                         # historiques temporels sans fuite
 │   ├── training.py                           # entraînement et évaluation
 │   └── prediction.py                         # prédiction d'un futur vol
@@ -262,6 +287,12 @@ uv run train-flight-models --sample-fraction 0.1
 uv run predict-flight --flight-json examples/flight.json
 ```
 
+Après tout changement du schéma des features ou de la version d'artefact, il faut
+relancer l'entraînement. La commande de prédiction d'exemple retourne un
+diagnostic : elle ne publie pas d'alerte tant que le modèle n'a pas réussi le
+business gate et que le planning journalier exact n'est pas fourni par une
+application.
+
 Si nécessaire, définir `JAVA_HOME` dans le même terminal avant les commandes
 Spark et les tests complets. Le ML Python n'a pas besoin de Java.
 
@@ -319,43 +350,44 @@ Ces résultats décrivent uniquement l'échantillon Spark de 10 000 lignes.
 
 ## Résultats ML actuels
 
-Le pipeline parcourt le CSV complet pour construire les historiques, puis retient
-de façon déterministe 696 596 vols cibles, soit environ 10 %. Le test final
-contient 115 700 vols de novembre et décembre. Ces lignes ne servent jamais à
-ajuster les modèles ou les seuils. Pour simuler une mise à jour quotidienne, un
-vol peut utiliser les résultats des jours de test strictement antérieurs, jamais
-ceux de son propre jour.
+Le pipeline parcourt les 7 079 081 lignes pour construire les historiques et la
+congestion planifiée, puis retient de façon déterministe 696 596 vols achevés
+comme cibles ML. Le protocole v5 sépare quatre périodes :
 
-Le benchmark novembre-décembre a toutefois été consulté pendant cet audit
-d'amélioration. Il permet une comparaison cohérente avec l'ancienne baseline,
-mais un jeu 2025 encore jamais observé sera nécessaire pour une estimation finale
-totalement indépendante.
+| Usage | Mois | Vols |
+|---|---|---:|
+| Apprentissage initial | janvier à juillet | 401 778 |
+| Early stopping, puis réapprentissage | août | 60 378 |
+| Choix du seuil | septembre à octobre | 118 740 |
+| Test temporel | novembre à décembre | 115 700 |
 
-Pour la classification d'un retard d'au moins 15 minutes :
+Le modèle est publiable uniquement si les bornes basses à 95 % de la précision
+et du rappel atteignent respectivement 50 % et 20 %, avec 5 à 10 % d'alertes et
+au moins 500 alertes. Aucun seuil ne satisfait ces contraintes sur la validation.
+Le seuil de repli `0,337` vise donc 7,5 % d'alertes sur cette validation, sans
+changer le résultat du gate : **le modèle reste non publiable**.
 
-- ROC-AUC : 0,657, contre 0,602 pour l'ancienne baseline ;
-- average precision : 0,292, contre 0,237 ;
-- précision : 0,256 ;
-- rappel : 0,614, contre 0,350 ;
-- F1 : 0,362, contre 0,292 ;
-- balanced accuracy : 0,611 ;
-- seuil choisi sur la validation : 0,194.
+| Ensemble | Précision | Borne basse 95 % | Rappel | Borne basse 95 % | Couverture | Alertes | TP | FP | Gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| Validation | 31,1 % | 30,1 % | 16,3 % | 15,7 % | 7,5 % | 8 906 | 2 768 | 6 138 | Échoué |
+| Test | 34,2 % | 33,3 % | 18,7 % | 18,2 % | 9,9 % | 11 433 | 3 908 | 7 525 | Échoué |
 
-Le F1 d'un modèle qui prédit tous les vols en retard serait seulement de 0,306.
-Le gain est réel, mais une précision de 0,256 signifie encore beaucoup de fausses
-alertes. L'exactitude brute n'est pas utilisée pour choisir le modèle car prédire
-« pas de retard » pour tous les vols atteindrait artificiellement 82 %.
+La stabilité mensuelle échoue également : novembre atteint 30,1 % de précision,
+18,5 % de rappel et 9,0 % de couverture ; décembre atteint 37,5 %, 18,9 % et
+10,7 %. La couverture de décembre dépasse donc la limite de 10 %.
 
-Parmi les quatre causes conditionnelles, `weather` atteint une ROC-AUC de 0,733.
-`security` reste inexploitable comme décision malgré une
-ROC-AUC de 0,703 : le test ne contient que 86 cas et la précision vaut 0,019.
+La ROC-AUC du test vaut `0,648` et l'average precision `0,280`. Maximiser le F1
+donnerait encore 40,1 % d'alertes, dont seulement 25,8 % correctes. Le nouveau
+seuil réduit donc fortement la sur-alerte, mais il ne crée pas le signal manquant
+nécessaire pour atteindre 50 % de précision.
 
-La régression conditionnelle obtient une MAE de 43,47 minutes contre 44,04 pour
-la médiane, mais sa RMSE et son R² restent moins bons. Cette amélioration de 0,57
-minute n'est pas suffisante pour considérer l'estimation comme fiable.
+La régression conditionnelle obtient une MAE de 43,46 minutes, contre 44,04 pour
+la médiane, mais sa RMSE et son R² restent moins bons. `weather` atteint une
+ROC-AUC de 0,714 ; `security` reste inexploitable avec seulement 86 cas et 0,8 %
+de précision.
 
-Le [rapport ML](reports/ml_training_report.md) détaille les causes de l'échec de
-la première baseline et l'ablation de chaque amélioration.
+Le [rapport ML](reports/ml_training_report.md) détaille le protocole, les
+variables, les résultats et les limites de déploiement.
 
 ## Travail restant
 
@@ -363,16 +395,19 @@ la première baseline et l'ablation de chaque amélioration.
 
 - ajouter des prévisions météo réellement connues avant le départ ;
 - intégrer des indicateurs de trafic et de perturbation du jour même ;
+- connecter automatiquement le planning complet du jour à l'interface ;
 - actualiser quotidiennement les profils historiques utilisés en production ;
 - entraîner la meilleure configuration sur davantage que 10 % des lignes ;
-- réserver une période distincte pour le réglage des paramètres et des seuils ;
+- valider une dernière fois sur un holdout 2025 jamais consulté ;
 - améliorer l'explication locale des prédictions, par exemple avec SHAP ;
 - étudier un modèle spécifique aux annulations, actuellement exclues.
 
-### Évolution optionnelle vers Streamlit
+### Évolution vers Streamlit
 
-- réutiliser les tableaux, graphiques, filtres et prédictions du notebook dans
-  une application web si une interface déployable devient nécessaire.
+Streamlit n'est pas encore implémenté. La future application devra réutiliser le
+business gate du pipeline, afficher un blocage rouge si le modèle n'est pas prêt
+et ne jamais demander à l'utilisateur de saisir manuellement les six volumes de
+planning.
 
 ## Limites connues
 
@@ -383,11 +418,13 @@ la première baseline et l'ablation de chaque amélioration.
   cibles d'entraînement.
 - Les probabilités de causes sont conditionnelles au fait que le vol soit en
   retard et plusieurs causes peuvent être proposées en même temps.
-- La régression actuelle n'améliore que de 0,57 minute la MAE de la médiane et
+- La régression actuelle n'améliore que d'environ 0,59 minute la MAE de la médiane et
   dégrade les autres métriques.
 - Les profils historiques doivent être actualisés pour rester pertinents après
   la fin de 2024 ; l'artefact local utilise les derniers profils disponibles.
 - Le modèle ne possède ni météo prévisionnelle ni état opérationnel du jour même.
+- Les profils typiques de planning permettent un diagnostic isolé, pas une alerte
+  publiable ; celle-ci exige le planning exact du jour.
 - Le benchmark novembre-décembre a servi à l'analyse d'ablation ; il ne constitue
   plus un holdout totalement vierge pour estimer la généralisation future.
 - Les fichiers Joblib ne doivent être chargés que s'ils proviennent d'une source
@@ -402,7 +439,8 @@ la première baseline et l'ablation de chaque amélioration.
 - Mémoire Spark insuffisante : conserver le master par défaut `local[2]`.
 - CSV complet absent : utiliser le petit CSV versionné pour tester le ML.
 - Mémoire limitée pendant le ML : réduire `--sample-fraction`, par exemple à
-  `0.02`.
+  `0.02`. Le calcul des historiques et du planning parcourt malgré tout le CSV
+  complet ; prévoir environ 4 Go de mémoire disponible pour le run officiel.
 - Modèle absent lors de la prédiction : exécuter d'abord
   `uv run train-flight-models`.
 - Notebook sans kernel Python : relancer
