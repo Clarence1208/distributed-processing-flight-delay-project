@@ -22,6 +22,14 @@ dependencies = [
 dev = [
     "pytest>=8,<9",
 ]
+notebook = [
+    "ipykernel>=6,<8",
+    "ipywidgets>=8,<9",
+    "jupyterlab>=4,<5",
+    "matplotlib>=3.8,<4",
+    "nbconvert>=7,<8",
+    "seaborn>=0.13,<1",
+]
 
 [project.scripts]
 prepare-spark-data = "flight_delays.parsing:main"

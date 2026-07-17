@@ -3,7 +3,7 @@
 Projet étudiant de traitement distribué consacré aux vols domestiques américains
 de 2024. L'objectif final est de prédire si un vol aura au moins 15 minutes de
 retard, d'estimer le nombre de minutes et de présenter les facteurs possibles
-dans une interface Streamlit.
+dans un notebook Jupyter interactif.
 
 Le code et les noms techniques sont en anglais. Les commentaires, les messages,
 les rapports et la documentation sont en français.
@@ -15,9 +15,11 @@ les rapports et la documentation sont en français.
 | 1. Parsing PySpark | Terminé | Échantillon reproductible de 10 000 vols, typage, contrôles qualité et Parquet |
 | 2. Analyse PySpark | Terminé | Statistiques, valeurs manquantes, agrégations, causes et corrélations de Pearson |
 | 3. Machine learning Python | Modèle amélioré | Historiques sans fuite, CatBoost, classification, régression, causes, évaluation et prédiction |
-| 4. Streamlit | À faire | Tableau de bord, graphiques et formulaire de prédiction |
+| 4. Visualisation Jupyter | Terminé | Graphiques, explorateur filtrable et formulaire de prédiction dans le notebook |
 
-Les résultats sont interprétés dans le
+Le parcours complet se trouve dans le
+[notebook principal](notebooks/flight_delay_pipeline.ipynb). Les résultats sont
+également interprétés dans le
 [rapport Spark](reports/spark_analysis.md) et le
 [rapport du machine learning](reports/ml_training_report.md).
 
@@ -72,6 +74,17 @@ Les résultats sont interprétés dans le
 - sauvegarde locale des modèles, historiques récents et métadonnées avec Joblib ;
 - commandes reproductibles `train-flight-models` et `predict-flight`.
 
+### Notebook Jupyter
+
+- parcours guidé des quatre étapes dans un seul fichier ;
+- aperçu du CSV brut et du Parquet propre ;
+- tableaux des indicateurs, valeurs manquantes, causes et corrélations ;
+- graphiques sur les mois, compagnies, aéroports, statuts et retards ;
+- explorateur interactif des 10 000 vols avec filtres ;
+- mode ML de démonstration rapide ou mode complet configurable ;
+- métriques, matrice de confusion et importance des features ;
+- formulaire modifiable pour prédire un futur vol.
+
 ## Colonnes et features ajoutées
 
 ### Spark
@@ -119,6 +132,8 @@ cibles d'entraînement.
 │   └── analysis/                             # sorties de l'analyse, ignorées
 ├── examples/
 │   └── flight.json                           # futur vol d'exemple
+├── notebooks/
+│   └── flight_delay_pipeline.ipynb            # parcours complet en quatre étapes
 ├── reports/
 │   ├── spark_analysis.md                     # rapport Spark versionné
 │   └── ml_training_report.md                 # rapport ML versionné
@@ -189,11 +204,12 @@ $env:JAVA_HOME="C:\Program Files\Java\jdk-17"
 ### 4. Créer l'environnement
 
 ```bash
-uv sync --extra dev --python 3.11
+uv sync --extra dev --extra notebook --python 3.11
 ```
 
 `uv.lock` verrouille notamment PySpark, NumPy, Polars, pandas, scikit-learn,
-CatBoost, Joblib et Pytest afin que toute l'équipe utilise le même environnement.
+CatBoost, JupyterLab, Seaborn, les widgets et Pytest afin que toute l'équipe
+utilise le même environnement.
 
 ## Données disponibles
 
@@ -208,7 +224,19 @@ l'équipe doit le récupérer depuis la source commune du projet et le placer so
 ce nom exact. Il sert à reproduire les métriques ML mais ne passe jamais par
 Spark.
 
-## Exécution rapide
+## Ouvrir le notebook
+
+```bash
+uv run --extra notebook jupyter lab notebooks/flight_delay_pipeline.ipynb
+```
+
+Dans JupyterLab, utiliser **Run → Run All Cells**. Le mode par défaut exécute les
+quatre étapes sur le CSV versionné de 10 000 lignes. Pour le modèle complet,
+placer le grand CSV dans `data/` puis définir `USE_FULL_ML_DATA = True` dans la
+cellule de configuration. Le notebook versionné contient déjà les derniers
+tableaux et graphiques exécutés ; les widgets nécessitent toutefois JupyterLab.
+
+## Exécution en ligne de commande
 
 ```bash
 # 1. Vérifier les tests Spark et Python
@@ -257,7 +285,8 @@ data/analysis/spark/
 models/
 ├── flight_delay_models.joblib
 ├── training_metrics.json
-└── feature_importance.csv
+├── feature_importance.csv
+└── notebook_demo/               # artefacts rapides produits par le notebook
 ```
 
 Ces dossiers sont ignorés par Git et peuvent être supprimés puis régénérés.
@@ -337,16 +366,10 @@ la première baseline et l'ablation de chaque amélioration.
 - améliorer l'explication locale des prédictions, par exemple avec SHAP ;
 - étudier un modèle spécifique aux annulations, actuellement exclues.
 
-### Étape 4 — Streamlit
+### Évolution optionnelle vers Streamlit
 
-- tableau de bord des statistiques et corrélations ;
-- filtres par date, compagnie, aéroport et route ;
-- graphiques des retards et de leurs causes ;
-- formulaire de saisie d'un futur vol ;
-- probabilité de retard et estimation en minutes ;
-- facteurs contribuant à la prédiction ;
-- chargement des modèles sauvegardés ;
-- tests de l'interface et instructions de lancement.
+- réutiliser les tableaux, graphiques, filtres et prédictions du notebook dans
+  une application web si une interface déployable devient nécessaire.
 
 ## Limites connues
 
@@ -366,7 +389,8 @@ la première baseline et l'ablation de chaque amélioration.
   plus un holdout totalement vierge pour estimer la généralisation future.
 - Les fichiers Joblib ne doivent être chargés que s'ils proviennent d'une source
   fiable et doivent être régénérés après une mise à jour des dépendances.
-- L'interface Streamlit n'est pas encore implémentée.
+- Les widgets du notebook nécessitent l'exécution locale de JupyterLab et ne sont
+  pas interactifs dans l'aperçu statique de GitHub.
 
 ## Résolution de problèmes
 
@@ -378,3 +402,5 @@ la première baseline et l'ablation de chaque amélioration.
   `0.02`.
 - Modèle absent lors de la prédiction : exécuter d'abord
   `uv run train-flight-models`.
+- Notebook sans kernel Python : relancer
+  `uv sync --extra dev --extra notebook --python 3.11`.
