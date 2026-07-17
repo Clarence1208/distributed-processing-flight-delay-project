@@ -4,6 +4,7 @@ import pytest
 from pyspark.sql import SparkSession
 
 from flight_delays.parsing import (
+    DEFAULT_SPARK_SAMPLE_SIZE,
     parse_and_validate,
     read_flights_csv,
     sample_rows,
@@ -27,12 +28,12 @@ def spark() -> SparkSession:
 
 @pytest.fixture(scope="session")
 def spark_sample_data(spark: SparkSession):
-    """Construit les 2 000 lignes Spark sans dépendre d'une sortie générée."""
+    """Construit les 10 000 lignes Spark sans dépendre d'une sortie générée."""
 
     data = parse_and_validate(
         sample_rows(
             read_flights_csv(spark, "data/flight_data_2024_sample.csv"),
-            sample_size=2000,
+            sample_size=DEFAULT_SPARK_SAMPLE_SIZE,
             seed=42,
         )
     ).cache()

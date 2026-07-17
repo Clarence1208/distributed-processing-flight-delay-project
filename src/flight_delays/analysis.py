@@ -377,11 +377,11 @@ def write_analysis(
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Analyse les 2 000 vols réservés à Spark."
+        description="Analyse les 10 000 vols réservés à Spark."
     )
     parser.add_argument(
         "--input",
-        default="data/processed/spark/flights_2000/flights",
+        default="data/processed/spark/flights_10000/flights",
         help="Dossier Parquet produit par l'étape 1.",
     )
     parser.add_argument(

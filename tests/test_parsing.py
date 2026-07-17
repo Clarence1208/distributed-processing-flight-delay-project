@@ -14,7 +14,7 @@ from flight_delays.parsing import (
 )
 
 def test_parses_spark_sample(spark_sample_data) -> None:
-    assert spark_sample_data.count() == 2_000
+    assert spark_sample_data.count() == 10_000
     assert spark_sample_data.filter("not is_valid_row").count() == 0
     assert isinstance(spark_sample_data.schema["fl_date"].dataType, DateType)
     assert isinstance(

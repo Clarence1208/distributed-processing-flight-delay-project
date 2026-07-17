@@ -12,7 +12,7 @@ les rapports et la documentation sont en français.
 
 | Étape | État | Contenu |
 |---|---|---|
-| 1. Parsing PySpark | Terminé | Échantillon reproductible de 2 000 vols, typage, contrôles qualité et Parquet |
+| 1. Parsing PySpark | Terminé | Échantillon reproductible de 10 000 vols, typage, contrôles qualité et Parquet |
 | 2. Analyse PySpark | Terminé | Statistiques, valeurs manquantes, agrégations, causes et corrélations de Pearson |
 | 3. Machine learning Python | Modèle amélioré | Historiques sans fuite, CatBoost, classification, régression, causes, évaluation et prédiction |
 | 4. Streamlit | À faire | Tableau de bord, graphiques et formulaire de prédiction |
@@ -28,7 +28,7 @@ Les résultats sont interprétés dans le
 - lecture des 35 colonnes CSV brutes avec un schéma explicite, sans inférence ;
 - suppression immédiate de `late_aircraft_delay`, conservée uniquement dans le
   fichier source pour respecter son format ;
-- tirage aléatoire exact et reproductible de 2 000 lignes avec la graine `42` ;
+- tirage aléatoire exact et reproductible de 10 000 lignes avec la graine `42` ;
 - conversion contrôlée des dates, entiers, nombres réels et textes ;
 - acceptation des entiers CSV écrits sous la forme `12` ou `12.0` ;
 - validation des champs obligatoires, dates, heures `HHMM`, indicateurs, durées
@@ -214,7 +214,7 @@ Spark.
 # 1. Vérifier les tests Spark et Python
 uv run pytest
 
-# 2. Préparer les 2 000 vols Spark
+# 2. Préparer les 10 000 vols Spark
 uv run prepare-spark-data --mode overwrite
 
 # 3. Exécuter l'analyse Spark
@@ -238,7 +238,7 @@ Spark et les tests complets. Le ML Python n'a pas besoin de Java.
 Les sorties reproductibles sont créées dans :
 
 ```text
-data/processed/spark/flights_2000/
+data/processed/spark/flights_10000/
 ├── flights/
 ├── rejects/
 └── quality_report/
@@ -273,17 +273,17 @@ uv run predict-flight --help
 
 ## Résultats Spark actuels
 
-Sur les 2 000 vols :
+Sur les 10 000 vols :
 
-- 420 vols achevés ont au moins 15 minutes de retard, soit 21,3 % ;
-- 25 vols sont annulés et 4 sont déroutés ;
+- 2 119 vols achevés ont au moins 15 minutes de retard, soit 21,5 % ;
+- 122 vols sont annulés et 42 sont déroutés ;
 - la médiane du retard à l'arrivée est de -6 minutes ;
-- parmi les quatre causes retenues, `carrier_delay` représente 58,4 % des
-  minutes, `nas_delay` 29,1 %, `weather_delay` 12,3 % et `security_delay` 0,2 % ;
-- `dep_delay` est très corrélé à `arr_delay` (`r = 0,983`), mais constitue une
+- parmi les quatre causes retenues, `carrier_delay` représente 54,2 % des
+  minutes, `nas_delay` 33,7 %, `weather_delay` 12,0 % et `security_delay` 0,1 % ;
+- `dep_delay` est très corrélé à `arr_delay` (`r = 0,966`), mais constitue une
   fuite de données pour un modèle pré-départ.
 
-Ces résultats décrivent uniquement l'échantillon Spark de 2 000 lignes.
+Ces résultats décrivent uniquement l'échantillon Spark de 10 000 lignes.
 
 ## Résultats ML actuels
 
@@ -350,7 +350,7 @@ la première baseline et l'ablation de chaque amélioration.
 
 ## Limites connues
 
-- L'analyse Spark repose volontairement sur seulement 2 000 lignes.
+- L'analyse Spark repose volontairement sur seulement 10 000 lignes.
 - Une corrélation ne démontre pas une causalité et Pearson ne mesure que les
   relations linéaires numériques.
 - Les causes officielles sont connues après le vol et servent uniquement de

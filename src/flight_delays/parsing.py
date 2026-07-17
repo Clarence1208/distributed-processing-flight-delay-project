@@ -142,6 +142,7 @@ DELAY_CAUSE_COLUMNS = [
 ]
 
 CORRUPT_RECORD_COLUMN = "_corrupt_record"
+DEFAULT_SPARK_SAMPLE_SIZE = 10_000
 
 
 def create_spark_session(
@@ -403,13 +404,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        default="data/processed/spark/flights_2000",
+        default="data/processed/spark/flights_10000",
         help="Dossier racine des fichiers Parquet et du rapport qualité.",
     )
     parser.add_argument(
         "--sample-size",
         type=int,
-        default=2000,
+        default=DEFAULT_SPARK_SAMPLE_SIZE,
         help="Nombre exact de lignes à sélectionner aléatoirement avant le parsing.",
     )
     parser.add_argument(
