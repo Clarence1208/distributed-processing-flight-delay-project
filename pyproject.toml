@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flight-delay-prediction"
+version = "0.1.0"
+description = "Pipeline PySpark pour préparer les vols domestiques américains de 2024."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy==1.26.4",
+    "pyspark==3.5.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+]
+
+[project.scripts]
+prepare-spark-data = "flight_delays.parsing:main"
+analyze-spark-data = "flight_delays.analysis:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flight_delays"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]

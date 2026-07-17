@@ -1,0 +1,42 @@
+# Systèmes d'exploitation et éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Spark et Java
+spark-warehouse/
+metastore_db/
+derby.log
+.sparkStaging/
+*.log
+
+# Données volumineuses et sorties reproductibles
+data/flight_data_2024.csv
+data/processed/
+data/analysis/
+
+# Modèles et secrets futurs
+models/
+artifacts/
+.env
+.streamlit/secrets.toml
+
+# Notebooks
+.ipynb_checkpoints/
