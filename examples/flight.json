@@ -1,8 +1,10 @@
 {
-  "month": 7,
-  "day_of_month": 14,
+  "flight_date": "2025-01-05",
+  "month": 1,
+  "day_of_month": 5,
   "day_of_week": 7,
   "op_unique_carrier": "AA",
+  "op_carrier_fl_num": 100,
   "origin": "JFK",
   "origin_state_nm": "New York",
   "dest": "LAX",

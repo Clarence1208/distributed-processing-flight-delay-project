@@ -1,4 +1,4 @@
-"""Entraînement des modèles Python de retard et de causes."""
+"""Entraînement des modèles de retard et de causes avec CatBoost."""
 
 from __future__ import annotations
 
@@ -9,17 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import catboost
 import joblib
 import numpy as np
 import pandas as pd
 import polars
 import sklearn
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.compose import ColumnTransformer
+from catboost import CatBoostClassifier, CatBoostRegressor
 from sklearn.dummy import DummyClassifier
-from sklearn.frozen import FrozenEstimator
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import SGDClassifier, SGDRegressor
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -36,88 +33,89 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from flight_delays.historical import build_history_profiles
 from flight_delays.ml_data import (
     CATEGORICAL_FEATURES,
     FEATURE_COLUMNS,
     MAX_PREDICTED_DELAY_MINUTES,
-    NUMERIC_FEATURES,
     REASON_TARGETS,
     load_ml_data,
     split_temporally,
 )
 
 
-def build_preprocessor(minimum_category_frequency: int = 20) -> ColumnTransformer:
-    """Crée le préprocesseur ajusté uniquement sur la période d'entraînement."""
-
-    numeric_pipeline = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
-    categorical_pipeline = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            (
-                "encoder",
-                OneHotEncoder(
-                    handle_unknown="infrequent_if_exist",
-                    min_frequency=minimum_category_frequency,
-                    dtype=np.float32,
-                ),
-            ),
-        ]
-    )
-    return ColumnTransformer(
-        [
-            ("numeric", numeric_pipeline, NUMERIC_FEATURES),
-            ("categorical", categorical_pipeline, CATEGORICAL_FEATURES),
-        ],
-        sparse_threshold=0.3,
-    )
+DELAY_CLASSIFICATION_FEATURES = [
+    name for name in FEATURE_COLUMNS if "_average_delay_minutes_" not in name
+]
 
 
-def _new_classifier(seed: int) -> SGDClassifier:
-    return SGDClassifier(
-        loss="log_loss",
-        penalty="l2",
-        alpha=1e-4,
-        max_iter=1000,
-        tol=1e-4,
-        class_weight="balanced",
-        random_state=seed,
+def _model_features(
+    data: pd.DataFrame,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Garantit les types attendus par CatBoost sans encodage one-hot."""
+
+    selected_columns = columns or FEATURE_COLUMNS
+    features = data[selected_columns].copy()
+    for name in set(CATEGORICAL_FEATURES).intersection(selected_columns):
+        features[name] = features[name].fillna("__missing__").astype(str)
+    return features
+
+
+def _new_classifier(seed: int) -> CatBoostClassifier:
+    return CatBoostClassifier(
+        iterations=600,
+        depth=8,
+        learning_rate=0.08,
+        loss_function="Logloss",
+        eval_metric="AUC",
+        l2_leaf_reg=8,
+        random_seed=seed,
+        thread_count=-1,
+        allow_writing_files=False,
+        verbose=False,
+        od_type="Iter",
+        od_wait=80,
     )
 
 
-def _fit_binary_classifier(features, target: np.ndarray, seed: int):
-    unique = np.unique(target)
+def _fit_binary_classifier(
+    train_features: pd.DataFrame,
+    train_target: np.ndarray,
+    validation_features: pd.DataFrame,
+    validation_target: np.ndarray,
+    seed: int,
+):
+    unique = np.unique(train_target)
     if len(unique) == 1:
-        model = DummyClassifier(strategy="constant", constant=int(unique[0]))
-    else:
-        model = _new_classifier(seed)
-    return model.fit(features, target)
+        return DummyClassifier(
+            strategy="constant", constant=int(unique[0])
+        ).fit(train_features, train_target)
+
+    model = _new_classifier(seed)
+    fit_arguments: dict[str, Any] = {
+        "X": train_features,
+        "y": train_target,
+        "cat_features": [
+            name for name in CATEGORICAL_FEATURES if name in train_features.columns
+        ],
+    }
+    if len(np.unique(validation_target)) == 2:
+        fit_arguments.update(
+            {
+                "eval_set": (validation_features, validation_target),
+                "use_best_model": True,
+            }
+        )
+    model.fit(**fit_arguments)
+    return model
 
 
-def _calibrate_classifier(model, features, target: np.ndarray):
-    """Calibre un modèle déjà ajusté sur l'ensemble de validation."""
-
-    if len(np.unique(target)) < 2 or isinstance(model, DummyClassifier):
-        return model
-    calibrated_model = CalibratedClassifierCV(
-        FrozenEstimator(model),
-        method="sigmoid",
-    )
-    return calibrated_model.fit(features, target)
-
-
-def _positive_probability(model, features) -> np.ndarray:
+def _positive_probability(model, features: pd.DataFrame) -> np.ndarray:
     classes = list(model.classes_)
     if 1 not in classes:
-        return np.zeros(features.shape[0], dtype=float)
+        return np.zeros(len(features), dtype=float)
     return model.predict_proba(features)[:, classes.index(1)]
 
 
@@ -148,6 +146,7 @@ def _classification_metrics(
         "sample_count": int(len(target)),
         "positive_count": int(target.sum()),
         "positive_percentage": float(target.mean() * 100),
+        "predicted_positive_percentage": float(prediction.mean() * 100),
         "threshold": float(threshold),
         "accuracy": float(accuracy_score(target, prediction)),
         "balanced_accuracy": (
@@ -186,14 +185,6 @@ def _regression_metrics(target: np.ndarray, prediction: np.ndarray) -> dict[str,
     }
 
 
-def delay_minutes_from_log_predictions(predictions: np.ndarray) -> np.ndarray:
-    """Convertit les sorties logarithmiques en estimations bornées et réalistes."""
-
-    minimum = np.log1p(15.0)
-    maximum = np.log1p(float(MAX_PREDICTED_DELAY_MINUTES))
-    return np.expm1(np.clip(predictions, minimum, maximum))
-
-
 def _data_summary(data: pd.DataFrame) -> dict[str, Any]:
     delayed = data["is_delayed_15"].to_numpy(dtype=np.int8)
     return {
@@ -205,15 +196,37 @@ def _data_summary(data: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _classification_baselines(target: np.ndarray) -> dict[str, Any]:
+    always_negative = np.zeros_like(target)
+    always_positive = np.ones_like(target)
+    return {
+        "always_negative": {
+            "accuracy": float(accuracy_score(target, always_negative)),
+            "f1": float(f1_score(target, always_negative, zero_division=0)),
+        },
+        "always_positive": {
+            "accuracy": float(accuracy_score(target, always_positive)),
+            "f1": float(f1_score(target, always_positive, zero_division=0)),
+        },
+    }
+
+
 def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.DataFrame]:
     """Entraîne les trois familles de modèles et calcule leurs métriques."""
 
     split = split_temporally(data)
-    preprocessor = build_preprocessor()
-
-    train_features = preprocessor.fit_transform(split.train[FEATURE_COLUMNS])
-    validation_features = preprocessor.transform(split.validation[FEATURE_COLUMNS])
-    test_features = preprocessor.transform(split.test[FEATURE_COLUMNS])
+    train_features = _model_features(split.train)
+    validation_features = _model_features(split.validation)
+    test_features = _model_features(split.test)
+    train_classification_features = _model_features(
+        split.train, DELAY_CLASSIFICATION_FEATURES
+    )
+    validation_classification_features = _model_features(
+        split.validation, DELAY_CLASSIFICATION_FEATURES
+    )
+    test_classification_features = _model_features(
+        split.test, DELAY_CLASSIFICATION_FEATURES
+    )
 
     train_delay_target = split.train["is_delayed_15"].to_numpy(dtype=np.int8)
     validation_delay_target = split.validation["is_delayed_15"].to_numpy(
@@ -221,50 +234,64 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
     )
     test_delay_target = split.test["is_delayed_15"].to_numpy(dtype=np.int8)
 
-    raw_delay_classifier = _fit_binary_classifier(
-        train_features, train_delay_target, seed
-    )
-    delay_classifier = _calibrate_classifier(
-        raw_delay_classifier,
-        validation_features,
+    delay_classifier = _fit_binary_classifier(
+        train_classification_features,
+        train_delay_target,
+        validation_classification_features,
         validation_delay_target,
+        seed,
     )
     validation_delay_probability = _positive_probability(
-        delay_classifier, validation_features
+        delay_classifier, validation_classification_features
     )
     delay_threshold = _best_f1_threshold(
         validation_delay_target, validation_delay_probability
     )
-    test_delay_probability = _positive_probability(delay_classifier, test_features)
+    test_delay_probability = _positive_probability(
+        delay_classifier, test_classification_features
+    )
 
     delayed_train_mask = train_delay_target == 1
     delayed_validation_mask = validation_delay_target == 1
     delayed_test_mask = test_delay_target == 1
-
-    delay_regressor = SGDRegressor(
-        loss="huber",
-        epsilon=0.5,
-        penalty="l2",
-        alpha=1e-4,
-        max_iter=1000,
-        tol=1e-4,
-        early_stopping=True,
-        validation_fraction=0.1,
-        n_iter_no_change=10,
-        random_state=seed,
-    )
     train_delay_minutes = split.train.loc[
         delayed_train_mask, "delay_minutes"
     ].to_numpy(dtype=float)
-    delay_regressor.fit(
-        train_features[delayed_train_mask], np.log1p(train_delay_minutes)
-    )
-
+    validation_delay_minutes = split.validation.loc[
+        delayed_validation_mask, "delay_minutes"
+    ].to_numpy(dtype=float)
     test_delay_minutes = split.test.loc[
         delayed_test_mask, "delay_minutes"
     ].to_numpy(dtype=float)
-    predicted_delay_minutes = delay_minutes_from_log_predictions(
-        delay_regressor.predict(test_features[delayed_test_mask])
+
+    delay_regressor = CatBoostRegressor(
+        iterations=600,
+        depth=8,
+        learning_rate=0.08,
+        loss_function="MAE",
+        eval_metric="MAE",
+        l2_leaf_reg=8,
+        random_seed=seed,
+        thread_count=-1,
+        allow_writing_files=False,
+        verbose=False,
+        od_type="Iter",
+        od_wait=80,
+    )
+    delay_regressor.fit(
+        train_features.loc[delayed_train_mask],
+        train_delay_minutes,
+        cat_features=CATEGORICAL_FEATURES,
+        eval_set=(
+            validation_features.loc[delayed_validation_mask],
+            validation_delay_minutes,
+        ),
+        use_best_model=True,
+    )
+    predicted_delay_minutes = np.clip(
+        delay_regressor.predict(test_features.loc[delayed_test_mask]),
+        15.0,
+        float(MAX_PREDICTED_DELAY_MINUTES),
     )
     train_delay_median = float(np.median(train_delay_minutes))
     baseline_delay_prediction = np.full_like(test_delay_minutes, train_delay_median)
@@ -282,19 +309,20 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
         test_target = split.test.loc[
             delayed_test_mask, target_column
         ].to_numpy(dtype=np.int8)
-        raw_model = _fit_binary_classifier(
-            train_features[delayed_train_mask], train_target, seed + offset
-        )
-        model = _calibrate_classifier(
-            raw_model,
-            validation_features[delayed_validation_mask],
+        model = _fit_binary_classifier(
+            train_features.loc[delayed_train_mask],
+            train_target,
+            validation_features.loc[delayed_validation_mask],
             validation_target,
+            seed + offset,
         )
         validation_probability = _positive_probability(
-            model, validation_features[delayed_validation_mask]
+            model, validation_features.loc[delayed_validation_mask]
         )
         threshold = _best_f1_threshold(validation_target, validation_probability)
-        test_probability = _positive_probability(model, test_features[delayed_test_mask])
+        test_probability = _positive_probability(
+            model, test_features.loc[delayed_test_mask]
+        )
         reason_classifiers[reason] = model
         reason_thresholds[reason] = threshold
         reason_metrics[reason] = {
@@ -304,19 +332,13 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
             "test": _classification_metrics(test_target, test_probability, threshold),
         }
 
-    feature_names = preprocessor.get_feature_names_out()
-    coefficients = (
-        np.asarray(raw_delay_classifier.coef_).reshape(-1)
-        if hasattr(raw_delay_classifier, "coef_")
-        else np.zeros(len(feature_names), dtype=float)
-    )
+    if isinstance(delay_classifier, CatBoostClassifier):
+        importances = delay_classifier.get_feature_importance()
+    else:
+        importances = np.zeros(len(DELAY_CLASSIFICATION_FEATURES), dtype=float)
     feature_importance = pd.DataFrame(
-        {
-            "feature": feature_names,
-            "coefficient": coefficients,
-            "absolute_coefficient": np.abs(coefficients),
-        }
-    ).sort_values("absolute_coefficient", ascending=False, ignore_index=True)
+        {"feature": DELAY_CLASSIFICATION_FEATURES, "importance": importances}
+    ).sort_values("importance", ascending=False, ignore_index=True)
 
     metrics = {
         "data": {
@@ -334,6 +356,7 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
             "test": _classification_metrics(
                 test_delay_target, test_delay_probability, delay_threshold
             ),
+            "test_baselines": _classification_baselines(test_delay_target),
         },
         "delay_regression": {
             "test": _regression_metrics(
@@ -348,19 +371,24 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
     }
 
     bundle = {
-        "artifact_version": 1,
+        "artifact_version": 2,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "preprocessor": preprocessor,
         "delay_classifier": delay_classifier,
         "delay_threshold": delay_threshold,
         "delay_regressor": delay_regressor,
         "reason_classifiers": reason_classifiers,
         "reason_thresholds": reason_thresholds,
-        "probability_calibration": "sigmoid",
         "feature_columns": FEATURE_COLUMNS,
+        "delay_feature_columns": DELAY_CLASSIFICATION_FEATURES,
+        "regression_feature_columns": FEATURE_COLUMNS,
+        "reason_feature_columns": FEATURE_COLUMNS,
+        "categorical_features": CATEGORICAL_FEATURES,
+        "history_profiles": build_history_profiles(data),
+        "history_cutoff_date": str(data["flight_date"].max()),
         "reason_targets": REASON_TARGETS,
         "versions": {
             "python": platform.python_version(),
+            "catboost": catboost.__version__,
             "numpy": np.__version__,
             "pandas": pd.__version__,
             "polars": polars.__version__,

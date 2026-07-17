@@ -4,21 +4,32 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date
 
 import pandas as pd
 import polars as pl
+
+from flight_delays.historical import (
+    HISTORICAL_FEATURES,
+    add_historical_features,
+    add_profile_values,
+)
 
 
 DELAY_THRESHOLD_MINUTES = 15
 MAX_PREDICTED_DELAY_MINUTES = 1440
 
-NUMERIC_FEATURES = [
+BASE_NUMERIC_FEATURES = [
     "day_of_month",
+    "day_of_year",
+    "week_of_year",
     "is_weekend",
     "month_sin",
     "month_cos",
     "day_of_week_sin",
     "day_of_week_cos",
+    "scheduled_departure_minutes",
+    "scheduled_arrival_minutes",
     "departure_time_sin",
     "departure_time_cos",
     "arrival_time_sin",
@@ -27,13 +38,23 @@ NUMERIC_FEATURES = [
     "distance",
 ]
 
+NUMERIC_FEATURES = BASE_NUMERIC_FEATURES + HISTORICAL_FEATURES
+
 CATEGORICAL_FEATURES = [
     "op_unique_carrier",
+    "flight_number",
     "origin",
     "origin_state_nm",
     "dest",
     "dest_state_nm",
     "route",
+    "carrier_route",
+    "departure_hour",
+    "arrival_hour",
+    "origin_hour",
+    "dest_hour",
+    "month_category",
+    "day_of_week_category",
 ]
 
 FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
@@ -67,10 +88,12 @@ FORBIDDEN_PRE_DEPARTURE_COLUMNS = {
 }
 
 RAW_ML_COLUMNS = [
+    "fl_date",
     "month",
     "day_of_month",
     "day_of_week",
     "op_unique_carrier",
+    "op_carrier_fl_num",
     "origin",
     "origin_state_nm",
     "dest",
@@ -107,8 +130,6 @@ def _hhmm_minutes_expression(name: str) -> pl.Expr:
 def _sample_filter(sample_fraction: float, seed: int) -> pl.Expr:
     """Construit un échantillonnage déterministe compatible avec le streaming."""
 
-    if not 0 < sample_fraction <= 1:
-        raise ValueError("La fraction d'échantillonnage doit être dans ]0, 1].")
     modulus = 1_000_003
     threshold = max(1, int(sample_fraction * modulus))
     row_index = pl.col("_row_index").cast(pl.UInt64)
@@ -121,7 +142,7 @@ def load_ml_data(
     sample_fraction: float = 0.1,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Parcourt le CSV complet en streaming et retourne un échantillon exploitable."""
+    """Parcourt le CSV et prépare les features sans utiliser Spark."""
 
     if not 0 < sample_fraction <= 1:
         raise ValueError("La fraction d'échantillonnage doit être dans ]0, 1].")
@@ -147,10 +168,29 @@ def load_ml_data(
     departure_minutes = _hhmm_minutes_expression("crs_dep_time")
     arrival_minutes = _hhmm_minutes_expression("crs_arr_time")
     two_pi = 2.0 * math.pi
-
     prepared = (
         lazy_data.with_columns(
+            pl.col("fl_date").str.to_date().alias("flight_date"),
+            departure_minutes.alias("scheduled_departure_minutes"),
+            arrival_minutes.alias("scheduled_arrival_minutes"),
+            (departure_minutes // 60).cast(pl.String).alias("departure_hour"),
+            (arrival_minutes // 60).cast(pl.String).alias("arrival_hour"),
+            pl.col("op_carrier_fl_num")
+            .cast(pl.Int64)
+            .cast(pl.String)
+            .alias("flight_number"),
             pl.concat_str(["origin", "dest"], separator="-").alias("route"),
+            pl.concat_str(
+                ["op_unique_carrier", "origin", "dest"], separator="-"
+            ).alias("carrier_route"),
+            pl.concat_str(
+                ["origin", (departure_minutes // 60).cast(pl.String)],
+                separator="-",
+            ).alias("origin_hour"),
+            pl.concat_str(
+                ["dest", (arrival_minutes // 60).cast(pl.String)],
+                separator="-",
+            ).alias("dest_hour"),
             (pl.col("day_of_week") >= 6).cast(pl.Int8).alias("is_weekend"),
             (two_pi * (pl.col("month") - 1) / 12).sin().alias("month_sin"),
             (two_pi * (pl.col("month") - 1) / 12).cos().alias("month_cos"),
@@ -160,10 +200,18 @@ def load_ml_data(
             (two_pi * (pl.col("day_of_week") - 1) / 7)
             .cos()
             .alias("day_of_week_cos"),
-            (two_pi * departure_minutes / 1440).sin().alias("departure_time_sin"),
-            (two_pi * departure_minutes / 1440).cos().alias("departure_time_cos"),
+            (two_pi * departure_minutes / 1440)
+            .sin()
+            .alias("departure_time_sin"),
+            (two_pi * departure_minutes / 1440)
+            .cos()
+            .alias("departure_time_cos"),
             (two_pi * arrival_minutes / 1440).sin().alias("arrival_time_sin"),
             (two_pi * arrival_minutes / 1440).cos().alias("arrival_time_cos"),
+            pl.col("month").cast(pl.String).alias("month_category"),
+            pl.col("day_of_week")
+            .cast(pl.String)
+            .alias("day_of_week_category"),
             (pl.col("arr_delay") >= DELAY_THRESHOLD_MINUTES)
             .cast(pl.Int8)
             .alias("is_delayed_15"),
@@ -171,15 +219,36 @@ def load_ml_data(
             (pl.col("carrier_delay") > 0).cast(pl.Int8).alias("reason_carrier"),
             (pl.col("weather_delay") > 0).cast(pl.Int8).alias("reason_weather"),
             (pl.col("nas_delay") > 0).cast(pl.Int8).alias("reason_nas"),
-            (pl.col("security_delay") > 0).cast(pl.Int8).alias("reason_security"),
+            (pl.col("security_delay") > 0)
+            .cast(pl.Int8)
+            .alias("reason_security"),
             (pl.col("late_aircraft_delay") > 0)
             .cast(pl.Int8)
             .alias("reason_late_aircraft"),
         )
-        .select("month", *FEATURE_COLUMNS, *TARGET_COLUMNS)
+        .with_columns(
+            pl.col("flight_date").dt.ordinal_day().alias("day_of_year"),
+            pl.col("flight_date").dt.week().alias("week_of_year"),
+        )
+        .select(
+            "flight_date",
+            "month",
+            *BASE_NUMERIC_FEATURES,
+            *CATEGORICAL_FEATURES,
+            *TARGET_COLUMNS,
+        )
         .collect(engine="streaming")
     )
-    return pd.DataFrame(prepared.to_dict(as_series=False))
+    prepared = add_historical_features(prepared, path).select(
+        "flight_date",
+        "month",
+        *FEATURE_COLUMNS,
+        *TARGET_COLUMNS,
+    )
+    frame = pd.DataFrame(prepared.to_dict(as_series=False))
+    for name in CATEGORICAL_FEATURES:
+        frame[name] = frame[name].fillna("__missing__").astype(str)
+    return frame
 
 
 def split_temporally(data: pd.DataFrame) -> TemporalSplit:
@@ -193,14 +262,19 @@ def split_temporally(data: pd.DataFrame) -> TemporalSplit:
     return TemporalSplit(train=train, validation=validation, test=test)
 
 
-def prepare_prediction_frame(flight: dict[str, object]) -> pd.DataFrame:
-    """Applique aux données d'un futur vol les mêmes transformations temporelles."""
+def prepare_prediction_frame(
+    flight: dict[str, object],
+    history_profiles: dict | None = None,
+) -> pd.DataFrame:
+    """Applique à un futur vol les mêmes transformations que pendant l'entraînement."""
 
     required = {
+        "flight_date",
         "month",
         "day_of_month",
         "day_of_week",
         "op_unique_carrier",
+        "op_carrier_fl_num",
         "origin",
         "origin_state_nm",
         "dest",
@@ -214,17 +288,19 @@ def prepare_prediction_frame(flight: dict[str, object]) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Champs obligatoires absents : {', '.join(missing)}")
 
+    try:
+        flight_date = date.fromisoformat(str(flight["flight_date"]))
+    except ValueError as error:
+        raise ValueError("La date du vol doit respecter le format YYYY-MM-DD.") from error
     month = int(flight["month"])
     day_of_month = int(flight["day_of_month"])
     day_of_week = int(flight["day_of_week"])
     departure = int(flight["crs_dep_time"])
     arrival = int(flight["crs_arr_time"])
-    if not 1 <= month <= 12:
-        raise ValueError("Le mois doit être compris entre 1 et 12.")
-    if not 1 <= day_of_month <= 31:
-        raise ValueError("Le jour du mois doit être compris entre 1 et 31.")
-    if not 1 <= day_of_week <= 7:
-        raise ValueError("Le jour de la semaine doit être compris entre 1 et 7.")
+    if (flight_date.month, flight_date.day) != (month, day_of_month):
+        raise ValueError("La date ne correspond pas au mois et au jour fournis.")
+    if flight_date.isoweekday() != day_of_week:
+        raise ValueError("La date ne correspond pas au jour de la semaine fourni.")
     for label, value in (("départ", departure), ("arrivée", arrival)):
         if value != 2400 and not (0 <= value <= 2359 and value % 100 <= 59):
             raise ValueError(f"L'heure prévue de {label} doit respecter le format HHMM.")
@@ -232,28 +308,50 @@ def prepare_prediction_frame(flight: dict[str, object]) -> pd.DataFrame:
         raise ValueError("La durée prévue doit être strictement positive.")
     if float(flight["distance"]) < 0:
         raise ValueError("La distance ne peut pas être négative.")
+    flight_number = int(float(flight["op_carrier_fl_num"]))
+    if flight_number <= 0:
+        raise ValueError("Le numéro de vol doit être strictement positif.")
+
     departure_minutes = (((departure // 100) * 60) + departure % 100) % 1440
     arrival_minutes = (((arrival // 100) * 60) + arrival % 100) % 1440
     two_pi = 2.0 * math.pi
+    carrier = str(flight["op_unique_carrier"])
+    origin = str(flight["origin"])
+    destination = str(flight["dest"])
+    departure_hour = str(departure_minutes // 60)
+    arrival_hour = str(arrival_minutes // 60)
 
-    row = {
+    row: dict[str, object] = {
         "day_of_month": day_of_month,
+        "day_of_year": flight_date.timetuple().tm_yday,
+        "week_of_year": flight_date.isocalendar().week,
         "is_weekend": int(day_of_week >= 6),
         "month_sin": math.sin(two_pi * (month - 1) / 12),
         "month_cos": math.cos(two_pi * (month - 1) / 12),
         "day_of_week_sin": math.sin(two_pi * (day_of_week - 1) / 7),
         "day_of_week_cos": math.cos(two_pi * (day_of_week - 1) / 7),
+        "scheduled_departure_minutes": departure_minutes,
+        "scheduled_arrival_minutes": arrival_minutes,
         "departure_time_sin": math.sin(two_pi * departure_minutes / 1440),
         "departure_time_cos": math.cos(two_pi * departure_minutes / 1440),
         "arrival_time_sin": math.sin(two_pi * arrival_minutes / 1440),
         "arrival_time_cos": math.cos(two_pi * arrival_minutes / 1440),
         "crs_elapsed_time": float(flight["crs_elapsed_time"]),
         "distance": float(flight["distance"]),
-        "op_unique_carrier": str(flight["op_unique_carrier"]),
-        "origin": str(flight["origin"]),
+        "op_unique_carrier": carrier,
+        "flight_number": str(flight_number),
+        "origin": origin,
         "origin_state_nm": str(flight["origin_state_nm"]),
-        "dest": str(flight["dest"]),
+        "dest": destination,
         "dest_state_nm": str(flight["dest_state_nm"]),
-        "route": f"{flight['origin']}-{flight['dest']}",
+        "route": f"{origin}-{destination}",
+        "carrier_route": f"{carrier}-{origin}-{destination}",
+        "departure_hour": departure_hour,
+        "arrival_hour": arrival_hour,
+        "origin_hour": f"{origin}-{departure_hour}",
+        "dest_hour": f"{destination}-{arrival_hour}",
+        "month_category": str(month),
+        "day_of_week_category": str(day_of_week),
     }
+    add_profile_values(row, flight, history_profiles)
     return pd.DataFrame([row], columns=FEATURE_COLUMNS)

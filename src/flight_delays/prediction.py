@@ -7,8 +7,13 @@ import json
 from pathlib import Path
 
 import joblib
-from flight_delays.ml_data import prepare_prediction_frame
-from flight_delays.training import delay_minutes_from_log_predictions
+import numpy as np
+
+from flight_delays.ml_data import (
+    FEATURE_COLUMNS,
+    MAX_PREDICTED_DELAY_MINUTES,
+    prepare_prediction_frame,
+)
 
 
 def load_model_bundle(path: str) -> dict:
@@ -27,17 +32,25 @@ def _positive_probability(model, features) -> float:
 def predict_flight(bundle: dict, flight: dict[str, object]) -> dict:
     """Retourne probabilité, minutes conditionnelles et raisons possibles."""
 
-    frame = prepare_prediction_frame(flight)
-    features = bundle["preprocessor"].transform(frame)
-    delay_probability = _positive_probability(bundle["delay_classifier"], features)
+    frame = prepare_prediction_frame(flight, bundle.get("history_profiles"))
+    delay_features = frame[bundle.get("delay_feature_columns", FEATURE_COLUMNS)]
+    regression_features = frame[
+        bundle.get("regression_feature_columns", FEATURE_COLUMNS)
+    ]
+    reason_features = frame[bundle.get("reason_feature_columns", FEATURE_COLUMNS)]
+    delay_probability = _positive_probability(
+        bundle["delay_classifier"], delay_features
+    )
     is_delayed = delay_probability >= bundle["delay_threshold"]
     conditional_minutes = float(
-        delay_minutes_from_log_predictions(
-            bundle["delay_regressor"].predict(features)
-        )[0]
+        np.clip(
+            bundle["delay_regressor"].predict(regression_features)[0],
+            15.0,
+            float(MAX_PREDICTED_DELAY_MINUTES),
+        )
     )
     reason_probabilities = {
-        reason: _positive_probability(model, features)
+        reason: _positive_probability(model, reason_features)
         for reason, model in bundle["reason_classifiers"].items()
     }
     ordered_reasons = dict(
@@ -49,6 +62,7 @@ def predict_flight(bundle: dict, flight: dict[str, object]) -> dict:
         if probability >= bundle["reason_thresholds"][reason]
     ]
     return {
+        "historical_context_date": bundle.get("history_cutoff_date"),
         "delay_probability": delay_probability,
         "classification_threshold": float(bundle["delay_threshold"]),
         "is_delayed_15_prediction": bool(is_delayed),
@@ -63,9 +77,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Prédit le retard d'un vol décrit dans un fichier JSON."
     )
-    parser.add_argument(
-        "--model", default="models/flight_delay_models.joblib"
-    )
+    parser.add_argument("--model", default="models/flight_delay_models.joblib")
     parser.add_argument("--flight-json", required=True)
     return parser
 

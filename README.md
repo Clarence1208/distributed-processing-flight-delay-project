@@ -14,7 +14,7 @@ les rapports et la documentation sont en français.
 |---|---|---|
 | 1. Parsing PySpark | Terminé | Échantillon reproductible de 2 000 vols, typage, contrôles qualité et Parquet |
 | 2. Analyse PySpark | Terminé | Statistiques, valeurs manquantes, agrégations, causes et corrélations de Pearson |
-| 3. Machine learning Python | Baseline terminée | Chargement Python, classification calibrée, régression, causes, évaluation et prédiction |
+| 3. Machine learning Python | Modèle amélioré | Historiques sans fuite, CatBoost, classification, régression, causes, évaluation et prédiction |
 | 4. Streamlit | À faire | Tableau de bord, graphiques et formulaire de prédiction |
 
 Les résultats sont interprétés dans le
@@ -56,14 +56,18 @@ Les résultats sont interprétés dans le
 - exclusion des vols annulés, déroutés ou sans retard d'arrivée connu ;
 - découpage chronologique : janvier-août pour l'entraînement,
   septembre-octobre pour la validation et novembre-décembre pour le test ;
-- classification d'un retard d'au moins 15 minutes avec `SGDClassifier` ;
-- calibration sigmoïde des probabilités sur la validation ;
-- régression conditionnelle du nombre de minutes avec `SGDRegressor` ;
+- 68 features historiques calculées uniquement sur les jours antérieurs ;
+- historiques glissants du réseau, de la compagnie, des aéroports et de la route ;
+- fréquence, volume et gravité récente des perturbations ;
+- classification d'un retard d'au moins 15 minutes avec `CatBoostClassifier` ;
+- traitement natif des catégories et de leurs interactions, sans one-hot ;
+- régression conditionnelle du nombre de minutes avec `CatBoostRegressor` ;
 - cinq classifications conditionnelles pour les causes `carrier`, `weather`,
   `nas`, `security` et `late_aircraft` ;
 - seuils de décision choisis sur la validation en maximisant le score F1 ;
-- métriques de classification, régression, confusion et coefficients ;
-- sauvegarde locale du préprocesseur, des modèles et des métadonnées avec Joblib ;
+- métriques de classification, régression, confusion, baselines naïves et
+  importance des features ;
+- sauvegarde locale des modèles, historiques récents et métadonnées avec Joblib ;
 - commandes reproductibles `train-flight-models` et `predict-flight`.
 
 ## Colonnes et features ajoutées
@@ -80,14 +84,18 @@ Les résultats sont interprétés dans le
 
 ### Machine learning
 
-Les features numériques utilisées avant le départ sont `day_of_month`,
-`is_weekend`, les encodages cycliques du mois, du jour de la semaine et des deux
-horaires prévus, `crs_elapsed_time` et `distance`.
+Les features numériques de planning comprennent le jour, la semaine, les
+encodages cycliques, les horaires prévus bruts et cycliques, la durée prévue et
+la distance.
 
-Les features catégorielles sont `op_unique_carrier`, `origin`,
-`origin_state_nm`, `dest`, `dest_state_nm` et `route`. Les catégories manquantes
-sont imputées puis encodées en one-hot. Les catégories rares sont regroupées et
-les catégories inconnues restent acceptées lors d'une future prédiction.
+Les features catégorielles comprennent la compagnie, le numéro de vol, les
+aéroports et États, la route, la combinaison compagnie-route, les heures et les
+combinaisons aéroport-heure. CatBoost les traite directement.
+
+Les 68 features historiques décrivent les 1, 3, 7, 14 ou 28 jours précédents,
+selon le groupe : taux de retard, taux de perturbation, nombre de vols et durée
+moyenne des retards. La fenêtre est fermée avant le jour cible. Une valeur du
+jour courant ou du futur ne peut donc pas entrer dans ces calculs.
 
 Les cibles ajoutées sont `is_delayed_15`, `delay_minutes`, `reason_carrier`,
 `reason_weather`, `reason_nas`, `reason_security` et `reason_late_aircraft`.
@@ -116,6 +124,7 @@ cibles d'entraînement.
 │   ├── parsing.py                            # étape 1, PySpark
 │   ├── analysis.py                           # étape 2, PySpark
 │   ├── ml_data.py                            # chargement et features Python
+│   ├── historical.py                         # historiques temporels sans fuite
 │   ├── training.py                           # entraînement et évaluation
 │   └── prediction.py                         # prédiction d'un futur vol
 ├── tests/
@@ -182,7 +191,7 @@ uv sync --extra dev --python 3.11
 ```
 
 `uv.lock` verrouille notamment PySpark, NumPy, Polars, pandas, scikit-learn,
-Joblib et Pytest afin que toute l'équipe utilise le même environnement.
+CatBoost, Joblib et Pytest afin que toute l'équipe utilise le même environnement.
 
 ## Données disponibles
 
@@ -214,7 +223,7 @@ uv run train-flight-models \
   --input data/flight_data_2024_sample.csv \
   --sample-fraction 1
 
-# 4b. Entraîner la baseline sur 10 % du CSV complet
+# 4b. Entraîner le modèle évalué sur 10 % du CSV complet
 uv run train-flight-models --sample-fraction 0.1
 
 # 5. Prédire le vol d'exemple avec le modèle local
@@ -276,38 +285,53 @@ Ces résultats décrivent uniquement l'échantillon Spark de 2 000 lignes.
 
 ## Résultats ML actuels
 
-La baseline a parcouru le CSV complet et retenu de façon déterministe 696 596
-vols achevés, soit environ 10 %. Le test final contient 115 700 vols de novembre
-et décembre, jamais utilisés pour ajuster les modèles ni les seuils.
+Le pipeline parcourt le CSV complet pour construire les historiques, puis retient
+de façon déterministe 696 596 vols cibles, soit environ 10 %. Le test final
+contient 115 700 vols de novembre et décembre. Ces lignes ne servent jamais à
+ajuster les modèles ou les seuils. Pour simuler une mise à jour quotidienne, un
+vol peut utiliser les résultats des jours de test strictement antérieurs, jamais
+ceux de son propre jour.
+
+Le benchmark novembre-décembre a toutefois été consulté pendant cet audit
+d'amélioration. Il permet une comparaison cohérente avec l'ancienne baseline,
+mais un jeu 2025 encore jamais observé sera nécessaire pour une estimation finale
+totalement indépendante.
 
 Pour la classification d'un retard d'au moins 15 minutes :
 
-- ROC-AUC : 0,602 ;
-- précision : 0,250 ;
-- rappel : 0,350 ;
-- F1 : 0,292 ;
-- exactitude : 0,693 ;
-- seuil calibré : 0,158.
+- ROC-AUC : 0,657, contre 0,602 pour l'ancienne baseline ;
+- average precision : 0,292, contre 0,237 ;
+- précision : 0,256 ;
+- rappel : 0,614, contre 0,350 ;
+- F1 : 0,362, contre 0,292 ;
+- balanced accuracy : 0,611 ;
+- seuil choisi sur la validation : 0,194.
 
-Ces scores indiquent un signal prédictif encore modeste avec les seules
-informations de planning. Parmi les causes conditionnelles, `late_aircraft`
-obtient la meilleure ROC-AUC avec 0,744. `security` est beaucoup trop rare pour
-produire une décision fiable.
+Le F1 d'un modèle qui prédit tous les vols en retard serait seulement de 0,306.
+Le gain est réel, mais une précision de 0,256 signifie encore beaucoup de fausses
+alertes. L'exactitude brute n'est pas utilisée pour choisir le modèle car prédire
+« pas de retard » pour tous les vols atteindrait artificiellement 82 %.
 
-La régression conditionnelle obtient une MAE de 44,04 minutes, presque identique
-à la baseline médiane de 44,04 minutes, et un R² négatif. L'interface devra donc
-présenter cette estimation comme expérimentale tant que des données météo et des
-agrégats historiques ne sont pas ajoutés.
+Parmi les causes conditionnelles, `late_aircraft` atteint une ROC-AUC de 0,775
+et `weather` 0,733. `security` reste inexploitable comme décision malgré une
+ROC-AUC de 0,703 : le test ne contient que 86 cas et la précision vaut 0,019.
+
+La régression conditionnelle obtient une MAE de 43,47 minutes contre 44,04 pour
+la médiane, mais sa RMSE et son R² restent moins bons. Cette amélioration de 0,57
+minute n'est pas suffisante pour considérer l'estimation comme fiable.
+
+Le [rapport ML](reports/ml_training_report.md) détaille les causes de l'échec de
+la première baseline et l'ablation de chaque amélioration.
 
 ## Travail restant
 
 ### Améliorations de l'étape 3
 
-- créer des agrégats historiques sans utiliser le futur ;
-- ajouter des données météo connues avant le départ et des indicateurs de trafic ;
-- comparer la baseline linéaire à des modèles d'arbres et régler les paramètres ;
+- ajouter des prévisions météo réellement connues avant le départ ;
+- intégrer des indicateurs de trafic et de perturbation du jour même ;
+- actualiser quotidiennement les profils historiques utilisés en production ;
 - entraîner la meilleure configuration sur davantage que 10 % des lignes ;
-- séparer validation de calibration et validation de choix des seuils ;
+- réserver une période distincte pour le réglage des paramètres et des seuils ;
 - améliorer l'explication locale des prédictions, par exemple avec SHAP ;
 - étudier un modèle spécifique aux annulations, actuellement exclues.
 
@@ -331,8 +355,13 @@ agrégats historiques ne sont pas ajoutés.
   cibles d'entraînement.
 - Les probabilités de causes sont conditionnelles au fait que le vol soit en
   retard et plusieurs causes peuvent être proposées en même temps.
-- La régression actuelle n'améliore pas réellement la médiane d'entraînement.
-- La calibration et les seuils utilisent le même ensemble de validation.
+- La régression actuelle n'améliore que de 0,57 minute la MAE de la médiane et
+  dégrade les autres métriques.
+- Les profils historiques doivent être actualisés pour rester pertinents après
+  la fin de 2024 ; l'artefact local utilise les derniers profils disponibles.
+- Le modèle ne possède ni météo prévisionnelle ni état opérationnel du jour même.
+- Le benchmark novembre-décembre a servi à l'analyse d'ablation ; il ne constitue
+  plus un holdout totalement vierge pour estimer la généralisation future.
 - Les fichiers Joblib ne doivent être chargés que s'ils proviennent d'une source
   fiable et doivent être régénérés après une mise à jour des dépendances.
 - L'interface Streamlit n'est pas encore implémentée.

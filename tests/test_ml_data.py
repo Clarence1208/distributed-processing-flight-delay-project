@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from flight_delays.ml_data import (
@@ -44,10 +45,12 @@ def test_temporal_split_respects_month_boundaries(ml_sample_data):
 
 def test_prepare_prediction_frame_creates_the_same_features():
     flight = {
+        "flight_date": "2024-07-14",
         "month": 7,
         "day_of_month": 14,
         "day_of_week": 7,
         "op_unique_carrier": "AA",
+        "op_carrier_fl_num": 100,
         "origin": "JFK",
         "origin_state_nm": "New York",
         "dest": "LAX",
@@ -77,10 +80,12 @@ def test_load_ml_data_rejects_invalid_sample_fraction():
 
 def test_prepare_prediction_frame_rejects_invalid_scheduled_time():
     flight = {
+        "flight_date": "2024-07-14",
         "month": 7,
         "day_of_month": 14,
         "day_of_week": 7,
         "op_unique_carrier": "AA",
+        "op_carrier_fl_num": 100,
         "origin": "JFK",
         "origin_state_nm": "New York",
         "dest": "LAX",
@@ -93,3 +98,28 @@ def test_prepare_prediction_frame_rejects_invalid_scheduled_time():
 
     with pytest.raises(ValueError, match="format HHMM"):
         prepare_prediction_frame(flight)
+
+
+def test_historical_rates_use_only_previous_days(ml_sample_data):
+    raw = pd.read_csv("data/flight_data_2024_sample.csv")
+    raw["flight_date"] = pd.to_datetime(raw["fl_date"]).dt.date
+    previous_day = raw.loc[
+        raw["flight_date"] == pd.Timestamp("2024-04-17").date()
+    ]
+    completed = previous_day.loc[
+        (previous_day["cancelled"] == 0)
+        & (previous_day["diverted"] == 0)
+        & previous_day["arr_delay"].notna()
+    ]
+    expected_rate = float((completed["arr_delay"] >= 15).mean())
+    target_rows = ml_sample_data.loc[
+        ml_sample_data["flight_date"] == pd.Timestamp("2024-04-18").date()
+    ]
+
+    assert target_rows["global_delay_rate_1d"].nunique() == 1
+    assert target_rows.iloc[0]["global_delay_rate_1d"] == pytest.approx(expected_rate)
+
+    first_day = ml_sample_data.loc[
+        ml_sample_data["flight_date"] == pd.Timestamp("2024-01-01").date()
+    ]
+    assert first_day["global_delay_rate_1d"].isna().all()

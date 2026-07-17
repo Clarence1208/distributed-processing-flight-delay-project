@@ -35,6 +35,7 @@ data/analysis/
 # Modèles et secrets futurs
 models/
 artifacts/
+catboost_info/
 .env
 .streamlit/secrets.toml
 

@@ -9,6 +9,7 @@ description = "Pipeline PySpark et machine learning pour prédire les retards de
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "catboost>=1.2.8,<2",
     "joblib>=1.4,<2",
     "numpy==1.26.4",
     "pandas>=2.2,<3",

@@ -18,7 +18,8 @@ def trained_models():
 def test_training_produces_all_models_and_metrics(trained_models):
     bundle, metrics, feature_importance = trained_models
 
-    assert bundle["artifact_version"] == 1
+    assert bundle["artifact_version"] == 2
+    assert bundle["history_cutoff_date"] == "2024-12-31"
     assert set(bundle["reason_classifiers"]) == {
         "carrier",
         "weather",
@@ -35,10 +36,12 @@ def test_training_produces_all_models_and_metrics(trained_models):
 def test_prediction_has_bounded_and_interpretable_outputs(trained_models):
     bundle, _, _ = trained_models
     flight = {
-        "month": 7,
-        "day_of_month": 14,
+        "flight_date": "2025-01-05",
+        "month": 1,
+        "day_of_month": 5,
         "day_of_week": 7,
         "op_unique_carrier": "AA",
+        "op_carrier_fl_num": 100,
         "origin": "JFK",
         "origin_state_nm": "New York",
         "dest": "LAX",
