@@ -1,0 +1,81 @@
+"""Chargement des modèles et prédiction d'un futur vol."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import joblib
+from flight_delays.ml_data import prepare_prediction_frame
+from flight_delays.training import delay_minutes_from_log_predictions
+
+
+def load_model_bundle(path: str) -> dict:
+    """Charge uniquement un artefact Joblib produit localement et jugé fiable."""
+
+    return joblib.load(path)
+
+
+def _positive_probability(model, features) -> float:
+    classes = list(model.classes_)
+    if 1 not in classes:
+        return 0.0
+    return float(model.predict_proba(features)[0, classes.index(1)])
+
+
+def predict_flight(bundle: dict, flight: dict[str, object]) -> dict:
+    """Retourne probabilité, minutes conditionnelles et raisons possibles."""
+
+    frame = prepare_prediction_frame(flight)
+    features = bundle["preprocessor"].transform(frame)
+    delay_probability = _positive_probability(bundle["delay_classifier"], features)
+    is_delayed = delay_probability >= bundle["delay_threshold"]
+    conditional_minutes = float(
+        delay_minutes_from_log_predictions(
+            bundle["delay_regressor"].predict(features)
+        )[0]
+    )
+    reason_probabilities = {
+        reason: _positive_probability(model, features)
+        for reason, model in bundle["reason_classifiers"].items()
+    }
+    ordered_reasons = dict(
+        sorted(reason_probabilities.items(), key=lambda item: item[1], reverse=True)
+    )
+    predicted_reasons = [
+        reason
+        for reason, probability in ordered_reasons.items()
+        if probability >= bundle["reason_thresholds"][reason]
+    ]
+    return {
+        "delay_probability": delay_probability,
+        "classification_threshold": float(bundle["delay_threshold"]),
+        "is_delayed_15_prediction": bool(is_delayed),
+        "estimated_delay_minutes_if_delayed": conditional_minutes,
+        "predicted_delay_minutes": conditional_minutes if is_delayed else 0.0,
+        "reason_probabilities_if_delayed": ordered_reasons,
+        "predicted_reasons_if_delayed": predicted_reasons,
+    }
+
+
+def build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Prédit le retard d'un vol décrit dans un fichier JSON."
+    )
+    parser.add_argument(
+        "--model", default="models/flight_delay_models.joblib"
+    )
+    parser.add_argument("--flight-json", required=True)
+    return parser
+
+
+def main() -> None:
+    arguments = build_argument_parser().parse_args()
+    flight = json.loads(Path(arguments.flight_json).read_text(encoding="utf-8"))
+    bundle = load_model_bundle(arguments.model)
+    print(json.dumps(predict_flight(bundle, flight), indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

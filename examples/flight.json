@@ -1,0 +1,14 @@
+{
+  "month": 7,
+  "day_of_month": 14,
+  "day_of_week": 7,
+  "op_unique_carrier": "AA",
+  "origin": "JFK",
+  "origin_state_nm": "New York",
+  "dest": "LAX",
+  "dest_state_nm": "California",
+  "crs_dep_time": 830,
+  "crs_arr_time": 1145,
+  "crs_elapsed_time": 375,
+  "distance": 2475
+}
