@@ -97,8 +97,8 @@ Ils sont soit régénérés par les commandes du projet, soit récupérés sépa
 ### 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/Clarence1208/distributed-processing-flight-dela-project.git
-cd distributed-processing-flight-dela-project
+git clone https://github.com/Clarence1208/distributed-processing-flight-delay-project.git
+cd distributed-processing-flight-delay-project
 ```
 
 ### 2. Installer les prérequis
