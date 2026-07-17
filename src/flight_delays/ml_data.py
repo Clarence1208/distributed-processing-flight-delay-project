@@ -64,7 +64,6 @@ REASON_TARGETS = {
     "weather": "reason_weather",
     "nas": "reason_nas",
     "security": "reason_security",
-    "late_aircraft": "reason_late_aircraft",
 }
 
 TARGET_COLUMNS = ["is_delayed_15", "delay_minutes", *REASON_TARGETS.values()]
@@ -84,7 +83,6 @@ FORBIDDEN_PRE_DEPARTURE_COLUMNS = {
     "weather_delay",
     "nas_delay",
     "security_delay",
-    "late_aircraft_delay",
 }
 
 RAW_ML_COLUMNS = [
@@ -109,7 +107,6 @@ RAW_ML_COLUMNS = [
     "weather_delay",
     "nas_delay",
     "security_delay",
-    "late_aircraft_delay",
 ]
 
 
@@ -222,9 +219,6 @@ def load_ml_data(
             (pl.col("security_delay") > 0)
             .cast(pl.Int8)
             .alias("reason_security"),
-            (pl.col("late_aircraft_delay") > 0)
-            .cast(pl.Int8)
-            .alias("reason_late_aircraft"),
         )
         .with_columns(
             pl.col("flight_date").dt.ordinal_day().alias("day_of_year"),

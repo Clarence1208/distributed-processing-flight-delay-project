@@ -3,9 +3,11 @@ from __future__ import annotations
 from flight_delays.analysis import (
     CORRELATION_COLUMNS,
     build_correlations,
+    build_delay_causes,
     build_overview,
     build_status_distribution,
 )
+from flight_delays.parsing import DELAY_CAUSE_COLUMNS
 
 
 def test_builds_overview_and_status_distribution(spark_sample_data) -> None:
@@ -34,3 +36,12 @@ def test_builds_arrival_delay_correlations(spark_sample_data) -> None:
     assert (
         arrival_correlations.filter("absolute_correlation > 1").count() == 0
     )
+    assert "late_aircraft_delay" not in CORRELATION_COLUMNS
+
+
+def test_excludes_previous_aircraft_cause(spark_sample_data) -> None:
+    causes = build_delay_causes(spark_sample_data)
+
+    assert "late_aircraft_delay" not in DELAY_CAUSE_COLUMNS
+    assert causes.filter("cause = 'late_aircraft_delay'").count() == 0
+    assert causes.count() == 4

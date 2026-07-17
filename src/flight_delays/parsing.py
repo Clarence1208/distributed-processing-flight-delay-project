@@ -53,6 +53,10 @@ SOURCE_COLUMNS = [
     "late_aircraft_delay",
 ]
 
+PARSED_COLUMNS = [
+    name for name in SOURCE_COLUMNS if name != "late_aircraft_delay"
+]
+
 INTEGER_COLUMNS = [
     "year",
     "month",
@@ -71,7 +75,6 @@ INTEGER_COLUMNS = [
     "weather_delay",
     "nas_delay",
     "security_delay",
-    "late_aircraft_delay",
 ]
 
 FLOAT_COLUMNS = [
@@ -120,7 +123,6 @@ REQUIRED_COLUMNS = [
     "weather_delay",
     "nas_delay",
     "security_delay",
-    "late_aircraft_delay",
 ]
 
 HHMM_COLUMNS = [
@@ -137,7 +139,6 @@ DELAY_CAUSE_COLUMNS = [
     "weather_delay",
     "nas_delay",
     "security_delay",
-    "late_aircraft_delay",
 ]
 
 CORRUPT_RECORD_COLUMN = "_corrupt_record"
@@ -264,7 +265,7 @@ def parse_and_validate(raw_data: DataFrame) -> DataFrame:
     typed_columns = INTEGER_COLUMNS + FLOAT_COLUMNS + ["fl_date"]
     format_check_columns = [f"_invalid_format_{name}" for name in typed_columns]
     data = raw_data.select(
-        *[_conversion_for(name).alias(name) for name in SOURCE_COLUMNS],
+        *[_conversion_for(name).alias(name) for name in PARSED_COLUMNS],
         F.col(CORRUPT_RECORD_COLUMN),
         *[
             _has_invalid_format(name).alias(f"_invalid_format_{name}")

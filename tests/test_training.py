@@ -25,7 +25,6 @@ def test_training_produces_all_models_and_metrics(trained_models):
         "weather",
         "nas",
         "security",
-        "late_aircraft",
     }
     assert 0 < bundle["delay_threshold"] < 1
     assert metrics["delay_classification"]["test"]["sample_count"] > 0

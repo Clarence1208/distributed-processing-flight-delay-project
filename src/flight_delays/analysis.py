@@ -38,7 +38,6 @@ CORRELATION_COLUMNS = [
     "weather_delay",
     "nas_delay",
     "security_delay",
-    "late_aircraft_delay",
     "arr_delay",
 ]
 

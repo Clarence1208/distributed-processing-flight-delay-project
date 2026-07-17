@@ -26,6 +26,7 @@ def test_load_ml_data_prepares_expected_rows_and_targets(ml_sample_data):
     assert set(REASON_TARGETS.values()).issubset(ml_sample_data.columns)
     assert set(ml_sample_data["is_delayed_15"].unique()).issubset({0, 1})
     assert not ml_sample_data["delay_minutes"].isna().any()
+    assert "reason_late_aircraft" not in ml_sample_data.columns
 
 
 def test_features_do_not_contain_post_departure_information():

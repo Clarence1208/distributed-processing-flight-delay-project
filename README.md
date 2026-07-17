@@ -25,7 +25,9 @@ Les résultats sont interprétés dans le
 
 ### Préparation Spark
 
-- lecture des 35 colonnes CSV avec un schéma explicite, sans inférence ;
+- lecture des 35 colonnes CSV brutes avec un schéma explicite, sans inférence ;
+- suppression immédiate de `late_aircraft_delay`, conservée uniquement dans le
+  fichier source pour respecter son format ;
 - tirage aléatoire exact et reproductible de 2 000 lignes avec la graine `42` ;
 - conversion contrôlée des dates, entiers, nombres réels et textes ;
 - acceptation des entiers CSV écrits sous la forme `12` ou `12.0` ;
@@ -42,7 +44,7 @@ Les résultats sont interprétés dans le
 - moyenne, médiane, percentiles et maximum du retard ;
 - valeurs manquantes par colonne ;
 - indicateurs par mois, compagnie et aéroport de départ ;
-- répartition des minutes entre les cinq causes enregistrées ;
+- répartition des minutes entre les quatre causes retenues ;
 - statistiques descriptives des variables numériques ;
 - matrice de corrélation de Pearson sur les vols achevés ;
 - classement des corrélations avec `arr_delay` ;
@@ -62,8 +64,8 @@ Les résultats sont interprétés dans le
 - classification d'un retard d'au moins 15 minutes avec `CatBoostClassifier` ;
 - traitement natif des catégories et de leurs interactions, sans one-hot ;
 - régression conditionnelle du nombre de minutes avec `CatBoostRegressor` ;
-- cinq classifications conditionnelles pour les causes `carrier`, `weather`,
-  `nas`, `security` et `late_aircraft` ;
+- quatre classifications conditionnelles pour les causes `carrier`, `weather`,
+  `nas` et `security` ;
 - seuils de décision choisis sur la validation en maximisant le score F1 ;
 - métriques de classification, régression, confusion, baselines naïves et
   importance des features ;
@@ -98,9 +100,9 @@ moyenne des retards. La fenêtre est fermée avant le jour cible. Une valeur du
 jour courant ou du futur ne peut donc pas entrer dans ces calculs.
 
 Les cibles ajoutées sont `is_delayed_15`, `delay_minutes`, `reason_carrier`,
-`reason_weather`, `reason_nas`, `reason_security` et `reason_late_aircraft`.
+`reason_weather`, `reason_nas` et `reason_security`.
 
-`dep_delay`, les horaires réels, les durées réelles et les cinq colonnes de
+`dep_delay`, les horaires réels, les durées réelles et les quatre colonnes de
 causes sont connus pendant ou après le vol. Ils ne sont jamais utilisés comme
 features du modèle pré-départ. Les causes officielles servent uniquement de
 cibles d'entraînement.
@@ -276,8 +278,8 @@ Sur les 2 000 vols :
 - 420 vols achevés ont au moins 15 minutes de retard, soit 21,3 % ;
 - 25 vols sont annulés et 4 sont déroutés ;
 - la médiane du retard à l'arrivée est de -6 minutes ;
-- `late_aircraft_delay` et `carrier_delay` représentent ensemble environ 75,4 %
-  des minutes de causes enregistrées ;
+- parmi les quatre causes retenues, `carrier_delay` représente 58,4 % des
+  minutes, `nas_delay` 29,1 %, `weather_delay` 12,3 % et `security_delay` 0,2 % ;
 - `dep_delay` est très corrélé à `arr_delay` (`r = 0,983`), mais constitue une
   fuite de données pour un modèle pré-départ.
 
@@ -312,8 +314,8 @@ Le gain est réel, mais une précision de 0,256 signifie encore beaucoup de faus
 alertes. L'exactitude brute n'est pas utilisée pour choisir le modèle car prédire
 « pas de retard » pour tous les vols atteindrait artificiellement 82 %.
 
-Parmi les causes conditionnelles, `late_aircraft` atteint une ROC-AUC de 0,775
-et `weather` 0,733. `security` reste inexploitable comme décision malgré une
+Parmi les quatre causes conditionnelles, `weather` atteint une ROC-AUC de 0,733.
+`security` reste inexploitable comme décision malgré une
 ROC-AUC de 0,703 : le test ne contient que 86 cas et la précision vaut 0,019.
 
 La régression conditionnelle obtient une MAE de 43,47 minutes contre 44,04 pour

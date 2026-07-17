@@ -21,7 +21,11 @@ Le pipeline répond à trois questions avant le départ prévu :
 
 1. le vol aura-t-il au moins 15 minutes de retard à l'arrivée ?
 2. s'il est en retard, combien de minutes peut-on estimer ?
-3. s'il est en retard, quelles causes officielles sont les plus plausibles ?
+3. s'il est en retard, quelles causes sont les plus plausibles parmi `carrier`,
+   `weather`, `nas` et `security` ?
+
+`late_aircraft_delay` est exclue du projet dès le parsing propre. Elle n'est ni
+une feature, ni une cible, ni une explication retournée par la prédiction.
 
 Les résultats sont produits avec :
 
@@ -79,8 +83,8 @@ amplitude. La médiane de 43 minutes est donc difficile à battre.
 
 ### 5. Causes rares ou indisponibles avant le vol
 
-La météo exacte et l'état de la rotation précédente ne figurent pas parmi les
-entrées pré-départ. `security` ne possède que 86 cas positifs dans le test, ce qui
+La météo exacte ne figure pas parmi les entrées pré-départ. `security` ne possède
+que 86 cas positifs dans le test, ce qui
 rend sa précision instable malgré une ROC-AUC supérieure à 0,5.
 
 ## Features ajoutées
@@ -188,7 +192,6 @@ une bonne estimation individuelle du nombre de minutes.
 | `weather` | 1 198 | 0,205 | 0,331 | 0,253 | 0,733 |
 | `nas` | 10 312 | 0,526 | 0,927 | 0,671 | 0,658 |
 | `security` | 86 | 0,019 | 0,163 | 0,035 | 0,703 |
-| `late_aircraft` | 9 871 | 0,613 | 0,878 | 0,722 | 0,775 |
 
 Les probabilités sont conditionnelles au fait que le vol soit retardé. Plusieurs
 causes peuvent être proposées simultanément. `security` doit rester accompagné
@@ -236,10 +239,9 @@ Les prochains gains sérieux nécessitent :
 
 - des prévisions météo par aéroport connues au moment de la prédiction ;
 - l'état des opérations du jour même deux ou trois heures avant le départ ;
-- la rotation précédente de l'appareil, absente faute de numéro de queue ;
 - une actualisation quotidienne des profils historiques ;
 - davantage de données temporelles que la seule année 2024 ;
-- une période séparée pour régler les hyperparamètres et les seuils.
+- une période séparée pour régler les hyperparamètres et les seuils ;
 - un véritable holdout 2025 jamais consulté pendant le développement.
 
 Sans ces informations, augmenter seulement la complexité du modèle risque surtout

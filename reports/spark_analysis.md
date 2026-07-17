@@ -6,6 +6,10 @@ Cette analyse porte uniquement sur l'échantillon reproductible de 2 000 vols
 préparé pour Spark avec la graine `42`. Un vol est considéré en retard lorsque
 son retard à l'arrivée (`arr_delay`) est supérieur ou égal à 15 minutes.
 
+La cause `late_aircraft_delay` est volontairement exclue dès le parsing propre.
+Elle ne participe ni aux statistiques, ni aux corrélations, ni aux futures
+explications du modèle.
+
 Les corrélations sont des corrélations linéaires de Pearson calculées sur 1 971
 vols achevés, non annulés, non déroutés et sans valeur manquante dans les
 variables étudiées.
@@ -47,7 +51,6 @@ la distance, la compagnie et les aéroports ne comportent aucune valeur manquant
 |---|---:|:---:|
 | `dep_delay` | 0,983 | Non |
 | `carrier_delay` | 0,764 | Non |
-| `late_aircraft_delay` | 0,567 | Non |
 | `weather_delay` | 0,298 | Non |
 | `nas_delay` | 0,282 | Non |
 | `taxi_out` | 0,155 | Non |
@@ -59,8 +62,9 @@ la distance, la compagnie et les aéroports ne comportent aucune valeur manquant
 | `day_of_week` | 0,008 | Oui |
 
 `dep_delay` explique presque directement `arr_delay`, mais n'est connu qu'après
-le départ. Les cinq colonnes de causes sont attribuées après le vol. Ces variables
-seraient donc des fuites de données dans un modèle qui prédit avant le départ.
+le départ. Les quatre colonnes de causes retenues sont attribuées après le vol.
+Ces variables seraient donc des fuites de données dans un modèle qui prédit
+avant le départ.
 
 Les variables numériques réellement connues à l'avance ont ici des corrélations
 linéaires faibles. Cela ne signifie pas qu'elles sont inutiles : les relations
@@ -72,16 +76,15 @@ ailleurs pas représentées dans une corrélation de Pearson classique.
 
 | Cause | Minutes | Vols affectés | Part des minutes attribuées |
 |---|---:|---:|---:|
-| Avion précédent en retard (`late_aircraft_delay`) | 14 275 | 215 | 41,0 % |
-| Compagnie (`carrier_delay`) | 11 964 | 212 | 34,4 % |
-| Système aérien national (`nas_delay`) | 5 967 | 222 | 17,2 % |
-| Météo (`weather_delay`) | 2 531 | 29 | 7,3 % |
-| Sécurité (`security_delay`) | 41 | 2 | 0,1 % |
+| Compagnie (`carrier_delay`) | 11 964 | 212 | 58,4 % |
+| Système aérien national (`nas_delay`) | 5 967 | 222 | 29,1 % |
+| Météo (`weather_delay`) | 2 531 | 29 | 12,3 % |
+| Sécurité (`security_delay`) | 41 | 2 | 0,2 % |
 
-Dans cet échantillon, les retards de l'avion précédent et ceux attribués à la
-compagnie représentent ensemble environ 75,4 % des minutes expliquées. Ces
-colonnes décrivent toutefois les causes constatées après le vol ; elles pourront
-servir de cibles explicatives, pas de caractéristiques d'entrée avant départ.
+Dans cet échantillon, la compagnie représente 58,4 % des minutes attribuées aux
+quatre causes retenues. Ces colonnes décrivent toutefois les causes constatées
+après le vol ; elles peuvent servir de cibles explicatives, mais jamais de
+features d'entrée avant le départ.
 
 ## Variations temporelles et opérationnelles
 
