@@ -25,7 +25,6 @@ def _feature_names(prefix: str, windows: tuple[int, ...]) -> list[str]:
             [
                 f"{prefix}_delay_rate_{window}d",
                 f"{prefix}_disruption_rate_{window}d",
-                f"{prefix}_average_delay_minutes_{window}d",
                 f"{prefix}_flight_count_{window}d",
             ]
         )
@@ -67,25 +66,17 @@ def build_history_table(
             (
                 (pl.col("cancelled") == 0)
                 & (pl.col("diverted") == 0)
-                & (pl.col("arr_delay") >= 15).fill_null(False)
+                & (pl.col("arr_delay") > 0).fill_null(False)
             )
             .cast(pl.Int8)
             .alias("delayed_flag"),
             (
                 (pl.col("cancelled") == 1)
                 | (pl.col("diverted") == 1)
-                | (pl.col("arr_delay") >= 15).fill_null(False)
+                | (pl.col("arr_delay") > 0).fill_null(False)
             )
             .cast(pl.Int8)
             .alias("disrupted_flag"),
-            pl.when(
-                (pl.col("cancelled") == 0)
-                & (pl.col("diverted") == 0)
-                & (pl.col("arr_delay") >= 15).fill_null(False)
-            )
-            .then(pl.col("arr_delay"))
-            .otherwise(0.0)
-            .alias("delayed_minutes"),
         )
     )
     groups = ["flight_date", *keys]
@@ -96,7 +87,6 @@ def build_history_table(
             pl.col("completed_flag").sum().alias("completed"),
             pl.col("delayed_flag").sum().alias("delayed"),
             pl.col("disrupted_flag").sum().alias("disrupted"),
-            pl.col("delayed_minutes").sum().alias("delayed_minutes"),
         )
         .collect(engine="streaming")
         .sort(*keys, "flight_date")
@@ -109,7 +99,6 @@ def build_history_table(
             "completed",
             "delayed",
             "disrupted",
-            "delayed_minutes",
         ):
             expression = pl.col(source).rolling_sum_by(
                 "flight_date",
@@ -134,13 +123,6 @@ def build_history_table(
                     pl.col(f"disrupted_{window}d")
                     / pl.col(f"flights_{window}d")
                 ).alias(f"{prefix}_disruption_rate_{window}d"),
-                pl.when(pl.col(f"delayed_{window}d") > 0)
-                .then(
-                    pl.col(f"delayed_minutes_{window}d")
-                    / pl.col(f"delayed_{window}d")
-                )
-                .otherwise(None)
-                .alias(f"{prefix}_average_delay_minutes_{window}d"),
                 pl.col(f"flights_{window}d")
                 .cast(pl.Float32)
                 .alias(f"{prefix}_flight_count_{window}d"),

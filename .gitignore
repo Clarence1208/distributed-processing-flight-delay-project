@@ -33,7 +33,10 @@ data/processed/
 data/analysis/
 
 # Modèles et secrets futurs
-models/
+models/*
+!models/official/
+models/official/*
+!models/official/flight_delay_models.joblib
 artifacts/
 catboost_info/
 .env

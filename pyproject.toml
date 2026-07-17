@@ -9,6 +9,7 @@ description = "Pipeline PySpark et machine learning pour prédire les retards de
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "altair>=5.5,<6",
     "catboost>=1.2.8,<2",
     "joblib>=1.4,<2",
     "numpy==1.26.4",
@@ -16,6 +17,7 @@ dependencies = [
     "polars>=1.30,<2",
     "pyspark==3.5.5",
     "scikit-learn>=1.6,<2",
+    "streamlit>=1.59,<2",
 ]
 
 [project.optional-dependencies]

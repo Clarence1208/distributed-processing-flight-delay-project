@@ -1,65 +1,61 @@
-# Rapport du modèle machine learning — protocole métier v5
+# Rapport du classifieur de retard — protocole métier v6
 
 ## Résumé
 
-Le modèle réduit désormais fortement la sur-alerte, mais il n'atteint pas le
-niveau de fiabilité demandé. Sur les 115 700 vols de novembre et décembre, il
-signale 11 433 vols, soit 9,9 %. Parmi ces alertes, 34,2 % correspondent à un
-retard réel d'au moins 15 minutes et 18,7 % des retards sont détectés.
+Le machine learning répond désormais à une seule question : **le vol arrivera-t-il
+en retard ?** La cible `is_delayed` vaut 1 dès que `arr_delay > 0`. Un retard
+d'une minute est donc positif ; une arrivée exactement à l'heure ou en avance est
+négative.
 
-Le contrat exige une précision d'au moins 50 %, un rappel d'au moins 20 % et une
-couverture comprise entre 5 et 10 %. Les bornes basses à 95 % doivent elles aussi
-dépasser les objectifs et au moins 500 alertes sont requises. Le résultat est
-donc sans ambiguïté : **business gate échoué, modèle non publiable**.
+Les modèles de causes et la régression du nombre de minutes ont été supprimés.
+Les colonnes `carrier_delay`, `weather_delay`, `nas_delay`, `security_delay` et
+`late_aircraft_delay` ne sont plus lues par le pipeline ML. Le code compagnie
+`op_unique_carrier` reste une feature disponible avant le départ.
 
-Cette conclusion est volontairement plus stricte qu'une simple accuracy. Sur le
-test, répondre « à l'heure » pour tous les vols aurait 82 % d'exactitude, tout en
-ne détectant aucun retard.
+Sur les 115 700 vols du test novembre-décembre, le modèle signale 19 629 vols,
+soit 17,0 %. Sa précision atteint **50,9 %**, son rappel **26,4 %** et sa borne
+basse de précision à 95 % **50,2 %**. Le test global respecte donc les objectifs.
 
-## Questions traitées
-
-Le pipeline tente de répondre, avant le départ prévu, à trois questions :
-
-1. le vol aura-t-il au moins 15 minutes de retard à l'arrivée ?
-2. s'il est retardé, combien de minutes peut-on estimer ?
-3. quelles causes sont les plus plausibles parmi `carrier`, `weather`, `nas` et
-   `security` ?
-
-`late_aircraft_delay` est exclue dès le parsing. Elle n'est ni une feature, ni
-une cible, ni une explication retournée.
+Le modèle reste néanmoins expérimental : la validation atteint seulement 49,1 %
+de précision et les résultats diffèrent fortement entre novembre et décembre.
+Le business gate complet reste donc échoué.
 
 ## Données et protocole temporel
 
 Le CSV complet contient 7 079 081 vols. Polars le parcourt pour construire les
-historiques et le planning, puis l'échantillonnage déterministe à 10 % conserve
-696 596 vols achevés comme cibles ML.
+historiques et les volumes de planning, puis l'échantillonnage déterministe à
+10 % conserve 696 596 vols achevés.
 
-| Sous-ensemble | Rôle | Mois | Vols | Retards | Taux |
+| Sous-ensemble | Rôle | Mois | Vols | Retards `> 0` | Taux |
 |---|---|---|---:|---:|---:|
-| Entraînement | apprentissage initial | janvier à juillet | 401 778 | 93 438 | 23,26 % |
-| Réglage | early stopping | août | 60 378 | 14 123 | 23,39 % |
-| Validation | choix du seuil uniquement | septembre à octobre | 118 740 | 17 013 | 14,33 % |
-| Test | mesure hors échantillon | novembre à décembre | 115 700 | 20 868 | 18,04 % |
+| Entraînement | apprentissage initial | janvier à juillet | 401 778 | 157 369 | 39,17 % |
+| Réglage | early stopping | août | 60 378 | 23 189 | 38,41 % |
+| Validation | choix du seuil | septembre à octobre | 118 740 | 34 063 | 28,69 % |
+| Test | mesure hors échantillon | novembre à décembre | 115 700 | 37 896 | 32,75 % |
 
-Août choisit le nombre d'arbres. Le modèle final est ensuite réentraîné sur
-janvier à août avec ce nombre fixé. Septembre-octobre ne sert qu'au seuil ; le
-test n'est jamais consulté par l'algorithme de sélection.
+Août fixe le nombre d'arbres. Le classifieur final est ensuite réentraîné sur
+janvier-août. Septembre-octobre choisit le seuil ; novembre-décembre n'est pas
+consulté par l'algorithme de sélection.
 
-Le benchmark novembre-décembre a toutefois été observé lors des itérations
-humaines précédentes du projet. Il reste utile pour la comparaison, mais un
-holdout 2025 jamais consulté sera indispensable avant tout déploiement.
+Le benchmark 2024 a été regardé pendant le développement humain. Une validation
+finale sur 2025, jamais consultée, reste indispensable avant un déploiement réel.
 
 ## Features disponibles avant le départ
 
-### Planning statique
+Le modèle utilise uniquement des informations disponibles avant le départ :
 
-- date, jour, semaine, week-end et encodages cycliques ;
-- heures prévues, durée prévue, distance et numéro de vol ;
-- compagnie, aéroports, États, route et interactions aéroport-heure.
+- date, mois, jour, semaine, week-end et encodages cycliques ;
+- horaires prévus, durée prévue, distance et numéro de vol ;
+- compagnie, aéroports, États, route et interactions aéroport-heure ;
+- six volumes de congestion construits sur le planning complet ;
+- historiques glissants du réseau, de la compagnie, des aéroports et de la
+  route, arrêtés avant le jour du vol.
 
-### Congestion planifiée
+Les historiques fournissent taux de retard, taux de perturbation et volume sur
+des fenêtres de 1 à 28 jours. Les anciennes moyennes de minutes, inutilisées par
+le classifieur, ont été retirées.
 
-Six volumes sont calculés sur le planning complet avant échantillonnage :
+Les six features de planning sont :
 
 - `origin_scheduled_departures_hour` ;
 - `origin_scheduled_departures_3h` ;
@@ -68,159 +64,125 @@ Six volumes sont calculés sur le planning complet avant échantillonnage :
 - `route_scheduled_flights_day` ;
 - `carrier_origin_scheduled_flights_day`.
 
-Ils comptent les vols prévus, y compris ceux qui seront ensuite annulés ou
-déroutés. Le jour d'arrivée est dérivé des heures et de `crs_elapsed_time` pour
-éviter de confondre un décalage de fuseau avec un passage à J+1.
+`dep_delay`, `arr_delay`, les horaires réels, les durées réelles et toutes les
+causes officielles sont interdites comme features.
 
-Pour un vol isolé, l'artefact peut fournir un profil médian par mois, jour et
-créneau. Ce profil sert uniquement au diagnostic : une alerte publiable exige
-les six volumes exacts du planning journalier.
+## Contrat métier
 
-### Historiques sans fuite
+Le plafond d'alertes a été adapté à la nouvelle prévalence de la cible. Avec
+32,8 % de retards dans le test, limiter les alertes à 10 % tout en demandant
+20 % de rappel imposerait mécaniquement une précision supérieure à 65 %.
 
-Les 68 features historiques utilisent uniquement les jours strictement
-antérieurs au vol cible.
-
-| Niveau | Fenêtres |
-|---|---|
-| Réseau | 1, 3, 7 et 28 jours |
-| Compagnie | 1, 7 et 28 jours |
-| Origine | 1, 3, 14 et 28 jours |
-| Destination | 1, 3, 14 et 28 jours |
-| Route | 7 et 28 jours |
-
-Chaque fenêtre fournit taux de retard, taux de perturbation, volume et gravité
-moyenne. Les horaires réels, `dep_delay`, les durées réelles et les causes
-officielles ne sont jamais des features pré-départ.
-
-## Contrat métier et seuil
-
-Le modèle est publiable seulement si toutes les conditions suivantes passent
-sur la validation, le test global et chaque mois du test :
+Le contrat v6 exige donc :
 
 - borne basse de Wilson à 95 % de la précision ≥ 50 % ;
 - borne basse de Wilson à 95 % du rappel ≥ 20 % ;
-- couverture des alertes entre 5 et 10 % ;
-- au moins 500 alertes.
+- couverture des alertes entre 5 et 20 % ;
+- au moins 500 alertes ;
+- conditions respectées sur la validation, le test global et chaque mois du
+  test.
 
-Aucun seuil ne respecte ce contrat sur septembre-octobre. Le seuil de repli
-`0,337121` cible donc le centre de la plage, soit 7,5 % d'alertes sur la
-validation. Un seuil de repli ne peut jamais rendre le gate positif.
+Aucun seuil ne respecte toutes les contraintes sur septembre-octobre. Le seuil
+de repli `0,448117` vise le centre de la plage de couverture, soit 12,5 % sur la
+validation. Un seuil de repli ne peut pas rendre le gate positif.
 
-## Classification principale
+## Résultats de classification
 
 | Métrique | Validation | Test |
 |---|---:|---:|
-| Précision | 31,08 % | 34,18 % |
-| Intervalle de précision à 95 % | [30,13 % ; 32,05 %] | [33,32 % ; 35,06 %] |
-| Rappel | 16,27 % | 18,73 % |
-| Intervalle de rappel à 95 % | [15,72 % ; 16,83 %] | [18,20 % ; 19,26 %] |
-| Couverture | 7,50 % | 9,88 % |
-| Alertes | 8 906 | 11 433 |
-| Vrais positifs | 2 768 | 3 908 |
-| Faux positifs | 6 138 | 7 525 |
-| F1 | 0,214 | 0,242 |
-| ROC-AUC | 0,666 | 0,648 |
-| Average precision | 0,244 | 0,280 |
-| Gate | Échoué | Échoué |
+| Précision | 49,08 % | **50,89 %** |
+| Intervalle de précision à 95 % | [48,28 % ; 49,88 %] | [50,19 % ; 51,59 %] |
+| Rappel | 21,39 % | **26,36 %** |
+| Intervalle de rappel à 95 % | [20,95 % ; 21,83 %] | [25,92 % ; 26,81 %] |
+| Couverture | 12,50 % | **16,97 %** |
+| Alertes | 14 843 | 19 629 |
+| Vrais positifs | 7 285 | 9 990 |
+| Faux positifs | 7 558 | 9 639 |
+| F1 | 0,298 | 0,347 |
+| ROC-AUC | 0,657 | 0,643 |
+| Average precision | 0,423 | 0,459 |
+| Gate local | Échoué | Réussi |
 
-La matrice de confusion du test est :
+Matrice de confusion du test :
 
-| | Prédit à l'heure | Alerte expérimentale |
+| | Prédit à l'heure | Signalé en retard |
 |---|---:|---:|
-| Réel à l'heure | 87 307 | 7 525 |
-| Réel en retard | 16 960 | 3 908 |
+| Réel à l'heure | 68 165 | 9 639 |
+| Réel en retard | 27 906 | 9 990 |
 
-### Stabilité mensuelle
+## Stabilité mensuelle
 
 | Mois | Précision | Rappel | Couverture | Alertes | Gate |
 |---|---:|---:|---:|---:|---|
-| Novembre | 30,14 % | 18,51 % | 9,04 % | 5 170 | Échoué |
-| Décembre | 37,52 % | 18,87 % | 10,70 % | 6 263 | Échoué |
+| Novembre | 49,14 % | 16,25 % | 9,55 % | 5 460 | Échoué |
+| Décembre | 51,57 % | 34,17 % | 24,22 % | 14 169 | Échoué |
 
-Décembre dépasse la limite de couverture. Cette dérive confirme qu'un seuil
-global calibré sur septembre-octobre n'est pas stable toute l'année.
+Novembre manque les objectifs de précision et de rappel. Décembre dépasse le
+plafond de couverture de 20 %. Le même seuil n'est donc pas stable entre les
+deux mois.
 
-### Pourquoi ne plus maximiser F1
+## Pourquoi le seuil F1 est rejeté
 
-Sur le même modèle, le seuil F1 `0,214254` signalerait 46 388 vols du test,
-soit 40,1 %. Sa précision serait seulement de 25,8 %, pour 57,4 % de rappel.
-Ce comportement est mathématiquement défendable pour F1 mais inacceptable pour
-un site utilisateur : près de trois alertes sur quatre seraient fausses et près
-de la moitié des vols seraient signalés.
+Le seuil maximisant F1 (`0,270839`) donnerait sur le test :
 
-## Apport des variables de congestion
+- précision : 38,66 % ;
+- rappel : 78,71 % ;
+- couverture : 66,68 %, soit 77 153 vols signalés ;
+- F1 : 0,519.
 
-Les variables de congestion sont utilisées, mais leur signal reste secondaire :
+Il obtiendrait un meilleur F1 en signalant les deux tiers des vols. Ce
+comportement est incompatible avec l'objectif utilisateur, même si la métrique
+statistique augmente.
 
-| Feature | Rang d'importance | Importance CatBoost |
-|---|---:|---:|
-| `dest_scheduled_arrivals_3h` | 42 | 0,958 |
-| `origin_scheduled_departures_3h` | 50 | 0,666 |
-| `dest_scheduled_arrivals_hour` | 52 | 0,601 |
-| `carrier_origin_scheduled_flights_day` | 56 | 0,550 |
-| `route_scheduled_flights_day` | 77 | 0,272 |
-| `origin_scheduled_departures_hour` | 78 | 0,240 |
+## Features les plus importantes
 
-Les principales features restent les heures, la compagnie, le mois et les
-perturbations historiques récentes. Le planning améliore le contexte disponible
-avant le départ, mais ne remplace ni la météo prévisionnelle ni l'état réel des
-opérations du jour.
+| Feature | Importance |
+|---|---:|
+| `arrival_hour` | 5,718 |
+| `departure_time_sin` | 5,465 |
+| `dest_hour` | 5,303 |
+| `dest_delay_rate_1d` | 5,283 |
+| `departure_hour` | 4,965 |
+| `scheduled_departure_minutes` | 4,935 |
+| `route_delay_rate_7d` | 4,884 |
+| `route_disruption_rate_7d` | 4,852 |
+| `day_of_week_category` | 4,772 |
+| `op_unique_carrier` | 4,569 |
 
-## Régression conditionnelle
-
-L'évaluation porte sur les 20 868 vols réellement retardés du test.
-
-| Modèle | MAE | RMSE | R² |
-|---|---:|---:|---:|
-| CatBoost | 43,46 min | 105,25 min | -0,070 |
-| Médiane de 43 min | 44,04 min | 104,89 min | -0,062 |
-
-Le gain de MAE est inférieur à une minute et les deux autres métriques sont
-moins bonnes. L'estimation individuelle reste expérimentale.
-
-## Causes conditionnelles
-
-| Cause | Cas positifs | Précision | Rappel | F1 | ROC-AUC |
-|---|---:|---:|---:|---:|---:|
-| `carrier` | 11 528 | 57,2 % | 95,0 % | 0,714 | 0,632 |
-| `weather` | 1 198 | 18,4 % | 34,6 % | 0,240 | 0,714 |
-| `nas` | 10 312 | 52,1 % | 94,9 % | 0,672 | 0,656 |
-| `security` | 86 | 0,8 % | 1,2 % | 0,009 | 0,628 |
-
-Les causes sont conditionnelles à un retard. Elles ne sont jamais affichées
-comme décisions publiables lorsque le classifieur principal échoue au gate.
-`security` doit rester masquée ou accompagnée d'un avertissement explicite.
+Le code compagnie contribue bien au modèle, mais il n'est pas suffisant seul.
+Les heures, la destination, la route et les historiques récents apportent
+également du signal.
 
 ## Contrat de prédiction
 
-L'artefact Joblib v5 contient les modèles, les profils historiques, les profils
-de planning et le résultat du business gate. `predict_flight` distingue :
+L'artefact Joblib v6 contient un seul `CatBoostClassifier`, les profils
+historiques, les profils de planning et le résultat du business gate.
 
-- `diagnostic_*` : résultat expérimental consultable dans le notebook ;
-- `published_delay_alert` : alerte exposable, sinon `None` ;
-- `prediction_publishable` : vrai uniquement si le gate passe et si le planning
-  journalier exact est fourni ;
+`predict_flight` retourne notamment :
+
+- `delay_probability` : probabilité diagnostique ;
+- `diagnostic_is_delayed_prediction` : classe interne expérimentale ;
+- `published_delay_alert` : décision publiable, sinon `None` ;
+- `prediction_publishable` : vrai uniquement si le gate passe et si les six
+  volumes exacts du planning journalier sont fournis ;
 - `publication_blockers` : raisons empêchant la publication.
 
-Avec le résultat actuel, toute prédiction reste diagnostique.
+Avec le run actuel, toute prédiction reste diagnostique.
 
-## Limites et prochaines données nécessaires
+## Limites et prochaines améliorations
 
-Le modèle atteint la limite informative du CSV 2024 pour l'objectif demandé.
-Les prochaines améliorations utiles sont :
+Le test global atteint le seuil demandé, mais pas la validation ni chaque mois.
+Les améliorations prioritaires sont :
 
-1. prévisions météo réellement disponibles à l'instant de prédiction, par
-   aéroport et horizon ;
-2. état des opérations du jour avant le départ : retards observés, files et
-   capacité aéroportuaire à un cutoff défini ;
-3. avis FAA/NAS connus à ce même cutoff ;
-4. connexion automatique au planning quotidien exact ;
-5. validation finale sur 2025, jamais consultée pendant le développement ;
-6. modèle séparé pour les annulations, actuellement exclues.
+1. ajouter des informations réellement disponibles le jour du vol : état des
+   opérations, capacité aéroportuaire et avis NAS connus à un cutoff défini ;
+2. connecter automatiquement le planning journalier exact ;
+3. calibrer et contrôler la dérive saisonnière sans consulter le test final ;
+4. valider sur une année 2025 entièrement tenue à l'écart ;
+5. éventuellement traiter les annulations dans un modèle séparé.
 
-Augmenter uniquement la complexité de CatBoost ou abaisser le seuil ne peut pas
-transformer les faux positifs actuels en information fiable.
+La météo et la sécurité ne doivent pas être réintroduites sans données
+prévisionnelles ou opérationnelles correspondantes.
 
 ## Reproduire le run
 
@@ -232,6 +194,7 @@ uv run train-flight-models \
   --seed 42
 ```
 
-Les artefacts sont ignorés par Git et doivent être régénérés localement. Leur
-construction parcourt le CSV complet et peut utiliser environ 4 Go de mémoire.
-Un fichier Joblib ne doit être chargé que s'il provient d'une source fiable.
+L'entraînement produit l'artefact v6 et ses métriques dans `models/official/`.
+L'artefact officiel de 4 Mo est versionné pour rendre le formulaire Streamlit
+utilisable après clonage ; les métriques et importances restent reproductibles
+localement.

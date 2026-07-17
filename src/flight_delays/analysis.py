@@ -16,10 +16,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from flight_delays.parsing import DELAY_CAUSE_COLUMNS, create_spark_session
-
-
-DELAY_THRESHOLD_MINUTES = 15
+from flight_delays.parsing import create_spark_session
 
 CORRELATION_COLUMNS = [
     "month",
@@ -34,10 +31,6 @@ CORRELATION_COLUMNS = [
     "taxi_in",
     "actual_elapsed_time",
     "air_time",
-    "carrier_delay",
-    "weather_delay",
-    "nas_delay",
-    "security_delay",
     "arr_delay",
 ]
 
@@ -67,9 +60,7 @@ def _completed_condition() -> Column:
 
 
 def _delayed_condition() -> Column:
-    return _completed_condition() & (
-        F.col("arr_delay") >= DELAY_THRESHOLD_MINUTES
-    )
+    return _completed_condition() & (F.col("arr_delay") > 0)
 
 
 def add_flight_status(data: DataFrame) -> DataFrame:
@@ -80,10 +71,7 @@ def add_flight_status(data: DataFrame) -> DataFrame:
         F.when(F.col("cancelled") == 1, F.lit("cancelled"))
         .when(F.col("diverted") == 1, F.lit("diverted"))
         .when(F.col("arr_delay").isNull(), F.lit("unknown"))
-        .when(
-            F.col("arr_delay") >= DELAY_THRESHOLD_MINUTES,
-            F.lit("delayed_15_plus"),
-        )
+        .when(F.col("arr_delay") > 0, F.lit("delayed"))
         .otherwise(F.lit("on_time")),
     )
 
@@ -220,54 +208,6 @@ def build_group_metrics(data: DataFrame, group_column: str) -> DataFrame:
     )
 
 
-def build_delay_causes(data: DataFrame) -> DataFrame:
-    """Résume les minutes et le nombre de vols affectés pour chaque cause."""
-
-    expressions = []
-    for name in DELAY_CAUSE_COLUMNS:
-        expressions.extend(
-            [
-                F.sum(F.coalesce(F.col(name), F.lit(0))).alias(
-                    f"{name}_total_minutes"
-                ),
-                F.sum(F.when(F.col(name) > 0, 1).otherwise(0)).alias(
-                    f"{name}_affected_flights"
-                ),
-            ]
-        )
-    aggregated = data.agg(*expressions).first().asDict()
-    total_minutes = sum(
-        int(aggregated[f"{name}_total_minutes"] or 0)
-        for name in DELAY_CAUSE_COLUMNS
-    )
-    rows = [
-        (
-            name,
-            int(aggregated[f"{name}_total_minutes"] or 0),
-            int(aggregated[f"{name}_affected_flights"] or 0),
-            (
-                float(aggregated[f"{name}_total_minutes"] or 0)
-                / total_minutes
-                * 100.0
-                if total_minutes
-                else 0.0
-            ),
-        )
-        for name in DELAY_CAUSE_COLUMNS
-    ]
-    schema = StructType(
-        [
-            StructField("cause", StringType(), False),
-            StructField("total_delay_minutes", LongType(), False),
-            StructField("affected_flight_count", LongType(), False),
-            StructField("delay_minutes_percentage", DoubleType(), False),
-        ]
-    )
-    return data.sparkSession.createDataFrame(rows, schema).orderBy(
-        F.desc("total_delay_minutes"), "cause"
-    )
-
-
 def build_correlations(data: DataFrame) -> tuple[DataFrame, DataFrame, int]:
     """Calcule la matrice de Pearson sur les vols achevés sans valeur manquante."""
 
@@ -348,7 +288,6 @@ def write_analysis(
     monthly_metrics = build_group_metrics(data, "month").orderBy("month")
     carrier_metrics = build_group_metrics(data, "op_unique_carrier")
     origin_metrics = build_group_metrics(data, "origin")
-    delay_causes = build_delay_causes(data)
     numeric_summary = build_numeric_summary(data)
     correlation_matrix, arrival_correlations, correlation_row_count = (
         build_correlations(data)
@@ -360,7 +299,6 @@ def write_analysis(
     _write_csv(monthly_metrics, f"{output_directory}/monthly_metrics", mode)
     _write_csv(carrier_metrics, f"{output_directory}/carrier_metrics", mode)
     _write_csv(origin_metrics, f"{output_directory}/origin_metrics", mode)
-    _write_csv(delay_causes, f"{output_directory}/delay_causes", mode)
     _write_csv(numeric_summary, f"{output_directory}/numeric_summary", mode)
     _write_csv(
         correlation_matrix,
@@ -417,7 +355,7 @@ def main() -> None:
         summary = overview.first().asDict()
         print(f"Analyse terminée sur {summary['flight_count']:,} vols.")
         print(
-            "Vols en retard d'au moins 15 minutes : "
+            "Vols arrivés en retard : "
             f"{summary['delayed_flight_count']:,} "
             f"({summary['delayed_flight_percentage']:.1f} % des vols achevés)."
         )

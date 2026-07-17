@@ -24,7 +24,13 @@ def test_parses_spark_sample(spark_sample_data) -> None:
         spark_sample_data.filter("scheduled_departure_minutes is null").count()
         == 0
     )
-    assert "late_aircraft_delay" not in spark_sample_data.columns
+    assert {
+        "carrier_delay",
+        "weather_delay",
+        "nas_delay",
+        "security_delay",
+        "late_aircraft_delay",
+    }.isdisjoint(spark_sample_data.columns)
 
 
 def test_random_sample_is_exact_and_reproducible(spark: SparkSession) -> None:

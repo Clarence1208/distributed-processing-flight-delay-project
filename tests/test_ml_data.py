@@ -7,7 +7,6 @@ import pytest
 from flight_delays.ml_data import (
     FEATURE_COLUMNS,
     FORBIDDEN_PRE_DEPARTURE_COLUMNS,
-    REASON_TARGETS,
     load_ml_data,
     prepare_prediction_frame,
     split_temporally,
@@ -29,10 +28,24 @@ def ml_sample_data():
 def test_load_ml_data_prepares_expected_rows_and_targets(ml_sample_data):
     assert len(ml_sample_data) == 9836
     assert set(FEATURE_COLUMNS).issubset(ml_sample_data.columns)
-    assert set(REASON_TARGETS.values()).issubset(ml_sample_data.columns)
-    assert set(ml_sample_data["is_delayed_15"].unique()).issubset({0, 1})
-    assert not ml_sample_data["delay_minutes"].isna().any()
-    assert "reason_late_aircraft" not in ml_sample_data.columns
+    assert set(ml_sample_data["is_delayed"].unique()).issubset({0, 1})
+    assert "delay_minutes" not in ml_sample_data.columns
+    assert not any(name.startswith("reason_") for name in ml_sample_data.columns)
+
+
+def test_delay_target_means_any_positive_arrival_delay(ml_sample_data):
+    raw = pd.read_csv("data/flight_data_2024_sample.csv")
+    completed = raw.loc[
+        raw["cancelled"].eq(0)
+        & raw["diverted"].eq(0)
+        & raw["arr_delay"].notna()
+    ]
+
+    assert int(ml_sample_data["is_delayed"].sum()) == int(
+        completed["arr_delay"].gt(0).sum()
+    )
+    assert completed.loc[completed["arr_delay"].eq(0)].shape[0] > 0
+    assert completed.loc[completed["arr_delay"].gt(0)].shape[0] > 0
 
 
 def test_features_do_not_contain_post_departure_information():
@@ -121,7 +134,7 @@ def test_historical_rates_use_only_previous_days(ml_sample_data):
         & (previous_day["diverted"] == 0)
         & previous_day["arr_delay"].notna()
     ]
-    expected_rate = float((completed["arr_delay"] >= 15).mean())
+    expected_rate = float((completed["arr_delay"] > 0).mean())
     target_rows = ml_sample_data.loc[
         ml_sample_data["flight_date"] == pd.Timestamp("2024-04-18").date()
     ]

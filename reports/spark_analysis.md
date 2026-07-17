@@ -1,18 +1,12 @@
 # Analyse PySpark des retards de vols
 
-## Périmètre et méthode
+## Périmètre
 
-Cette analyse porte uniquement sur l'échantillon reproductible de 10 000 vols
-préparé pour Spark avec la graine `42`. Un vol est considéré en retard lorsque
-son retard à l'arrivée (`arr_delay`) est supérieur ou égal à 15 minutes.
+L'analyse porte sur l'échantillon reproductible de 10 000 vols obtenu avec la
+graine `42`. Un vol achevé est considéré en retard lorsque `arr_delay > 0`.
 
-La cause `late_aircraft_delay` est volontairement exclue dès le parsing propre.
-Elle ne participe ni aux statistiques, ni aux corrélations, ni aux futures
-explications du modèle.
-
-Les corrélations sont des corrélations linéaires de Pearson calculées sur 9 836
-vols achevés, non annulés, non déroutés et sans valeur manquante dans les
-variables étudiées.
+Les cinq colonnes de causes postérieures au vol sont exclues dès le parsing
+propre. Elles ne participent plus aux statistiques ni aux corrélations.
 
 ## Résultats globaux
 
@@ -20,102 +14,100 @@ variables étudiées.
 |---|---:|
 | Vols analysés | 10 000 |
 | Vols achevés | 9 836 |
-| Retards d'au moins 15 minutes | 2 119 |
-| Taux de retard parmi les vols achevés | 21,5 % |
+| Vols arrivés en retard | 3 578 |
+| Taux de retard | 36,38 % |
 | Vols annulés | 122 (1,22 %) |
 | Vols déroutés | 42 (0,42 %) |
-| Retard moyen à l'arrivée | 7,5 minutes |
-| Retard médian à l'arrivée | -6 minutes |
-| 90e percentile du retard | 47 minutes |
+| Retard moyen à l'arrivée | 7,55 minutes |
+| Retard médian à l'arrivée | −6 minutes |
+| 90e percentile | 47 minutes |
 | Retard maximal | 2 014 minutes |
 
-La médiane négative indique qu'au moins la moitié des vols arrivent en avance.
-La moyenne positive est tirée vers le haut par une minorité de retards très
-importants. Le 99e percentile est de 217 minutes, tandis qu'un vol extrême atteint
-2 014 minutes de retard. La médiane et les percentiles décrivent donc mieux un
-vol habituel que la moyenne seule.
+La médiane négative montre qu'au moins la moitié des vols arrivent en avance.
+Une minorité de retards extrêmes tire néanmoins la moyenne vers le haut.
 
-## Qualité et valeurs manquantes
+## Qualité des données
 
 Les 164 valeurs manquantes de `arr_delay`, `actual_elapsed_time` et `air_time`
-correspondent aux 122 annulations et aux 42 déroutements. Elles sont attendues et
-ne constituent pas une erreur de parsing.
+correspondent aux 122 annulations et aux 42 déroutements. Les variables prévues,
+la distance, la compagnie et les aéroports sont complètes dans l'échantillon.
 
-`cancellation_code` est vide pour 9 878 vols, car cette information n'est
-renseignée que pour les 122 vols annulés. Les variables prévues avant le départ,
-la distance, la compagnie et les aéroports ne comportent aucune valeur manquante.
+Les 10 000 lignes passent les règles de parsing. Le Parquet propre ne contient
+plus `carrier_delay`, `weather_delay`, `nas_delay`, `security_delay` ni
+`late_aircraft_delay`.
 
-## Corrélations avec le retard à l'arrivée
+## Corrélations avec `arr_delay`
 
-| Variable | Corrélation de Pearson | Disponible avant le départ ? |
+Les corrélations de Pearson utilisent 9 836 vols achevés.
+
+| Variable | Corrélation | Disponible avant le départ ? |
 |---|---:|:---:|
 | `dep_delay` | 0,966 | Non |
-| `carrier_delay` | 0,658 | Non |
-| `nas_delay` | 0,355 | Non |
-| `weather_delay` | 0,317 | Non |
 | `taxi_out` | 0,184 | Non |
 | `taxi_in` | 0,130 | Non |
 | `scheduled_departure_minutes` | 0,087 | Oui |
 | `scheduled_arrival_minutes` | 0,075 | Oui |
 | `actual_elapsed_time` | 0,048 | Non |
 | `day_of_week` | 0,037 | Oui |
-| `month` | -0,022 | Oui |
+| `month` | −0,022 | Oui |
 | `air_time` | 0,011 | Non |
-| `crs_elapsed_time` | -0,008 | Oui |
-| `distance` | -0,008 | Oui |
-| `security_delay` | 0,006 | Non |
-| `day_of_month` | 0,001 | Oui |
+| `crs_elapsed_time` | −0,008 | Oui |
+| `distance` | −0,008 | Oui |
 
-`dep_delay` explique presque directement `arr_delay`, mais n'est connu qu'après
-le départ. Les quatre colonnes de causes retenues sont attribuées après le vol.
-Ces variables seraient donc des fuites de données dans un modèle qui prédit
-avant le départ.
+`dep_delay` est presque directement lié au retard d'arrivée, mais il est connu
+après le départ. Il constituerait une fuite de données. Les variables numériques
+connues à l'avance ont des relations linéaires faibles ; CatBoost exploite aussi
+les non-linéarités et les interactions catégorielles.
 
-Les variables numériques réellement connues à l'avance ont ici des corrélations
-linéaires faibles. Cela ne signifie pas qu'elles sont inutiles : les relations
-peuvent être non linéaires et dépendre d'interactions avec la compagnie,
-l'aéroport, la route et l'horaire. Les variables catégorielles ne sont par
-ailleurs pas représentées dans une corrélation de Pearson classique.
+## Variations mensuelles
 
-## Causes enregistrées des retards
+| Mois | Taux de retard |
+|---|---:|
+| Janvier | 39,75 % |
+| Février | 29,76 % |
+| Mars | 39,13 % |
+| Avril | 36,09 % |
+| Mai | 41,43 % |
+| Juin | 40,27 % |
+| Juillet | 48,19 % |
+| Août | 37,92 % |
+| Septembre | 28,88 % |
+| Octobre | 25,19 % |
+| Novembre | 32,62 % |
+| Décembre | 37,36 % |
 
-| Cause | Minutes | Vols affectés | Part des minutes attribuées |
-|---|---:|---:|---:|
-| Compagnie (`carrier_delay`) | 48 709 | 1 136 | 54,2 % |
-| Système aérien national (`nas_delay`) | 30 271 | 1 056 | 33,7 % |
-| Météo (`weather_delay`) | 10 831 | 141 | 12,0 % |
-| Sécurité (`security_delay`) | 88 | 6 | 0,1 % |
+Juillet est le mois le plus retardé de l'échantillon ; octobre est le moins
+retardé. Ces observations restent indicatives sur seulement 10 000 vols.
 
-Dans cet échantillon, la compagnie représente 54,2 % des minutes attribuées aux
-quatre causes retenues. Ces colonnes décrivent toutefois les causes constatées
-après le vol ; elles peuvent servir de cibles explicatives, mais jamais de
-features d'entrée avant le départ.
+## Compagnies et aéroports principaux
 
-## Variations temporelles et opérationnelles
+Parmi les cinq compagnies les plus représentées :
 
-Les mois de juillet (31,9 %), juin (26,4 %) et janvier (25,2 %) ont les taux de
-retard les plus élevés. Octobre (11,9 %), février (14,8 %) et septembre (15,4 %)
-ont les taux les plus faibles. Chaque mois contient entre 716 et 946 vols : ces
-écarts sont indicatifs et devront être confirmés sur le dataset ML complet.
+| Compagnie | Vols | Taux de retard |
+|---|---:|---:|
+| `WN` | 2 022 | 38,43 % |
+| `DL` | 1 459 | 32,71 % |
+| `AA` | 1 385 | 42,87 % |
+| `OO` | 1 080 | 32,80 % |
+| `UA` | 1 033 | 34,19 % |
 
-Parmi les cinq compagnies les plus représentées, les taux observés sont de
-28,1 % pour `AA` (1 385 vols), 22,3 % pour `UA` (1 033), 21,3 % pour `WN`
-(2 022), 19,7 % pour `OO` (1 080) et 17,5 % pour `DL` (1 459).
+Parmi les cinq aéroports de départ les plus représentés :
 
-Parmi les cinq aéroports de départ les plus présents, `DEN` atteint 27,9 % de
-retards sur 412 vols, `CLT` 27,7 % sur 319, `ORD` 26,4 % sur 391, `DFW` 25,9 %
-sur 438 et `ATL` 19,7 % sur 496. Ces valeurs ne mesurent pas un effet causal
-propre à l'aéroport : elles mélangent notamment les routes, compagnies, horaires
-et conditions rencontrées.
+| Aéroport | Vols | Taux de retard |
+|---|---:|---:|
+| `ATL` | 496 | 33,88 % |
+| `DFW` | 438 | 42,29 % |
+| `DEN` | 412 | 43,63 % |
+| `ORD` | 391 | 39,02 % |
+| `CLT` | 319 | 41,08 % |
 
-## Limites et conséquences pour le ML
+Ces taux ne démontrent pas une causalité propre à la compagnie ou à l'aéroport.
+Ils mélangent notamment routes, horaires, saison et conditions opérationnelles.
 
-- L'échantillon de 10 000 lignes sert à comprendre les données, pas à tirer des
-  conclusions définitives sur tous les vols américains.
+## Limites
+
+- L'échantillon Spark sert à comprendre les données, pas à entraîner le modèle.
 - Une corrélation ne démontre pas une causalité.
-- Pearson mesure seulement les relations linéaires entre variables numériques.
-- Les valeurs extrêmes influencent fortement les moyennes et les corrélations.
-- Le futur modèle devra exclure les informations connues après le départ et
-  traiter les variables catégorielles avec un encodage adapté.
-
-Le dataset ML complet restera traité exclusivement en Python lors de l'étape 3.
+- Pearson ne mesure que les relations linéaires numériques.
+- Les valeurs extrêmes influencent les moyennes et les corrélations.
+- Le dataset ML complet reste traité exclusivement en Python.

@@ -53,8 +53,16 @@ SOURCE_COLUMNS = [
     "late_aircraft_delay",
 ]
 
+POST_FLIGHT_CAUSE_COLUMNS = {
+    "carrier_delay",
+    "weather_delay",
+    "nas_delay",
+    "security_delay",
+    "late_aircraft_delay",
+}
+
 PARSED_COLUMNS = [
-    name for name in SOURCE_COLUMNS if name != "late_aircraft_delay"
+    name for name in SOURCE_COLUMNS if name not in POST_FLIGHT_CAUSE_COLUMNS
 ]
 
 INTEGER_COLUMNS = [
@@ -71,10 +79,6 @@ INTEGER_COLUMNS = [
     "arr_time",
     "cancelled",
     "diverted",
-    "carrier_delay",
-    "weather_delay",
-    "nas_delay",
-    "security_delay",
 ]
 
 FLOAT_COLUMNS = [
@@ -119,10 +123,6 @@ REQUIRED_COLUMNS = [
     "diverted",
     "crs_elapsed_time",
     "distance",
-    "carrier_delay",
-    "weather_delay",
-    "nas_delay",
-    "security_delay",
 ]
 
 HHMM_COLUMNS = [
@@ -132,13 +132,6 @@ HHMM_COLUMNS = [
     "wheels_on",
     "crs_arr_time",
     "arr_time",
-]
-
-DELAY_CAUSE_COLUMNS = [
-    "carrier_delay",
-    "weather_delay",
-    "nas_delay",
-    "security_delay",
 ]
 
 CORRUPT_RECORD_COLUMN = "_corrupt_record"
@@ -318,11 +311,6 @@ def parse_and_validate(raw_data: DataFrame) -> DataFrame:
         )
         for name in HHMM_COLUMNS
     )
-    rules.extend(
-        (f"negative_delay:{name}", F.col(name) < 0)
-        for name in DELAY_CAUSE_COLUMNS
-    )
-
     data = _add_validation_errors(data, rules).drop(*format_check_columns)
     return (
         data.withColumn(

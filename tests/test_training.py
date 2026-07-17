@@ -24,14 +24,12 @@ def trained_models():
 def test_training_produces_all_models_and_metrics(trained_models):
     bundle, metrics, feature_importance = trained_models
 
-    assert bundle["artifact_version"] == 5
+    assert bundle["artifact_version"] == 6
     assert bundle["history_cutoff_date"] == "2024-12-31"
-    assert set(bundle["reason_classifiers"]) == {
-        "carrier",
-        "weather",
-        "nas",
-        "security",
-    }
+    assert bundle["target_definition"]["operator"] == ">"
+    assert bundle["target_definition"]["threshold_minutes"] == 0
+    assert "delay_regressor" not in bundle
+    assert "reason_classifiers" not in bundle
     assert 0 < bundle["delay_threshold"] < 1
     assert metrics["delay_classification"]["test"]["sample_count"] > 0
     threshold_selection = metrics["delay_classification"]["threshold_selection"]
@@ -45,7 +43,10 @@ def test_training_produces_all_models_and_metrics(trained_models):
     assert business_gate["threshold_selected_on"] == "validation"
     assert business_gate["test_used_for_threshold_selection"] is False
     assert isinstance(business_gate["passed"], bool)
-    assert metrics["delay_regression"]["test"]["mae"] >= 0
+    assert "delay_regression" not in metrics
+    assert "reasons" not in metrics
+    assert metrics["artifact_version"] == 6
+    assert metrics["target_definition"] == bundle["target_definition"]
     assert not feature_importance.empty
 
 
@@ -68,7 +69,7 @@ def test_business_threshold_satisfies_all_constraints_when_possible():
     assert gate["passed"] is True
     assert metrics["precision"] >= 0.50
     assert metrics["recall"] >= 0.20
-    assert 0.05 <= metrics["alert_coverage"] <= 0.10
+    assert 0.05 <= metrics["alert_coverage"] <= 0.20
     assert metrics["alert_count"] >= 500
     assert metrics["precision_confidence_interval_95"]["lower"] >= 0.50
     assert metrics["recall_confidence_interval_95"]["lower"] >= 0.20
@@ -89,7 +90,7 @@ def test_business_threshold_uses_honest_conservative_fallback():
     assert selection["feasible_on_validation"] is False
     assert selection["fallback_reason"]
     assert gate["passed"] is False
-    assert 0.05 <= metrics["alert_coverage"] <= 0.10
+    assert 0.05 <= metrics["alert_coverage"] <= 0.20
 
 
 def test_business_gate_rejects_an_unreliable_small_support():
@@ -132,7 +133,7 @@ def test_prediction_has_bounded_and_interpretable_outputs(trained_models):
     result = predict_flight(bundle, flight)
 
     assert 0 <= result["delay_probability"] <= 1
-    assert result["artifact_version"] == 5
+    assert result["artifact_version"] == 6
     assert result["model_business_ready"] == bundle["business_readiness"]["ready"]
     assert result["schedule_context_source"] == "typical_schedule_profile"
     assert result["prediction_status"] in {
@@ -145,25 +146,10 @@ def test_prediction_has_bounded_and_interpretable_outputs(trained_models):
         assert isinstance(result["published_delay_alert"], bool)
     else:
         assert result["published_delay_alert"] is None
-        assert result["is_delayed_15_prediction"] is None
-        assert result["estimated_delay_minutes_if_delayed"] is None
-        assert result["predicted_delay_minutes"] is None
-        assert result["reason_probabilities_if_delayed"] == {}
-        assert result["predicted_reasons_if_delayed"] == []
-    assert (
-        15
-        <= result["diagnostic_estimated_delay_minutes_if_delayed"]
-        <= 1440
-    )
-    assert set(result["diagnostic_reason_probabilities_if_delayed"]) == set(
-        bundle["reason_classifiers"]
-    )
-    assert all(
-        0 <= probability <= 1
-        for probability in result[
-            "diagnostic_reason_probabilities_if_delayed"
-        ].values()
-    )
+    assert isinstance(result["diagnostic_is_delayed_prediction"], bool)
+    assert "is_delayed_prediction" not in result
+    assert "diagnostic_estimated_delay_minutes_if_delayed" not in result
+    assert "diagnostic_reason_probabilities_if_delayed" not in result
 
     ready_bundle = {
         **bundle,
@@ -185,5 +171,4 @@ def test_prediction_has_bounded_and_interpretable_outputs(trained_models):
     assert publishable_result["schedule_context_source"] == "provided_daily_schedule"
     assert publishable_result["prediction_publishable"] is True
     assert isinstance(publishable_result["published_delay_alert"], bool)
-    assert isinstance(publishable_result["is_delayed_15_prediction"], bool)
     assert publishable_result["publication_blockers"] == []

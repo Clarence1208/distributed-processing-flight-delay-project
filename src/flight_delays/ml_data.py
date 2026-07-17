@@ -21,9 +21,6 @@ from flight_delays.schedule import (
 )
 
 
-DELAY_THRESHOLD_MINUTES = 15
-MAX_PREDICTED_DELAY_MINUTES = 1440
-
 BASE_NUMERIC_FEATURES = [
     "day_of_month",
     "day_of_year",
@@ -64,14 +61,7 @@ CATEGORICAL_FEATURES = [
 
 FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
-REASON_TARGETS = {
-    "carrier": "reason_carrier",
-    "weather": "reason_weather",
-    "nas": "reason_nas",
-    "security": "reason_security",
-}
-
-TARGET_COLUMNS = ["is_delayed_15", "delay_minutes", *REASON_TARGETS.values()]
+TARGET_COLUMNS = ["is_delayed"]
 
 FORBIDDEN_PRE_DEPARTURE_COLUMNS = {
     "dep_time",
@@ -88,6 +78,7 @@ FORBIDDEN_PRE_DEPARTURE_COLUMNS = {
     "weather_delay",
     "nas_delay",
     "security_delay",
+    "late_aircraft_delay",
 }
 
 RAW_ML_COLUMNS = [
@@ -108,10 +99,6 @@ RAW_ML_COLUMNS = [
     "crs_elapsed_time",
     "distance",
     "arr_delay",
-    "carrier_delay",
-    "weather_delay",
-    "nas_delay",
-    "security_delay",
 ]
 
 
@@ -205,14 +192,7 @@ def load_ml_data(
             (two_pi * arrival_minutes / 1440).cos().alias("arrival_time_cos"),
             pl.col("month").cast(pl.String).alias("month_category"),
             pl.col("day_of_week").cast(pl.String).alias("day_of_week_category"),
-            (pl.col("arr_delay") >= DELAY_THRESHOLD_MINUTES)
-            .cast(pl.Int8)
-            .alias("is_delayed_15"),
-            pl.col("arr_delay").cast(pl.Float32).alias("delay_minutes"),
-            (pl.col("carrier_delay") > 0).cast(pl.Int8).alias("reason_carrier"),
-            (pl.col("weather_delay") > 0).cast(pl.Int8).alias("reason_weather"),
-            (pl.col("nas_delay") > 0).cast(pl.Int8).alias("reason_nas"),
-            (pl.col("security_delay") > 0).cast(pl.Int8).alias("reason_security"),
+            (pl.col("arr_delay") > 0).cast(pl.Int8).alias("is_delayed"),
         )
         .with_columns(
             pl.col("flight_date").dt.ordinal_day().alias("day_of_year"),

@@ -1,4 +1,4 @@
-"""Entraînement des modèles de retard et de causes avec CatBoost."""
+"""Entraînement du classifieur de retard avec CatBoost."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import polars
 import sklearn
-from catboost import CatBoostClassifier, CatBoostRegressor
+from catboost import CatBoostClassifier
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import (
     accuracy_score,
@@ -25,11 +25,8 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
     log_loss,
-    mean_absolute_error,
-    mean_squared_error,
     precision_recall_curve,
     precision_score,
-    r2_score,
     recall_score,
     roc_auc_score,
 )
@@ -38,24 +35,26 @@ from flight_delays.historical import build_history_profiles
 from flight_delays.ml_data import (
     CATEGORICAL_FEATURES,
     FEATURE_COLUMNS,
-    MAX_PREDICTED_DELAY_MINUTES,
-    REASON_TARGETS,
     load_ml_data,
     split_temporally,
 )
 from flight_delays.schedule import build_schedule_profiles
 
 
-DELAY_CLASSIFICATION_FEATURES = [
-    name for name in FEATURE_COLUMNS if "_average_delay_minutes_" not in name
-]
+DELAY_CLASSIFICATION_FEATURES = FEATURE_COLUMNS.copy()
 
 BUSINESS_MIN_PRECISION = 0.50
 BUSINESS_MIN_RECALL = 0.20
 BUSINESS_MIN_ALERT_COVERAGE = 0.05
-BUSINESS_MAX_ALERT_COVERAGE = 0.10
+BUSINESS_MAX_ALERT_COVERAGE = 0.20
 BUSINESS_MIN_ALERT_COUNT = 500
 CONFIDENCE_Z_95 = 1.959963984540054
+TARGET_DEFINITION = {
+    "source": "arr_delay",
+    "operator": ">",
+    "threshold_minutes": 0,
+    "label": "is_delayed",
+}
 
 
 def _model_features(
@@ -141,23 +140,6 @@ def _fit_binary_classifier(
         ],
     )
     return final_model
-
-
-def _new_regressor(seed: int, iterations: int = 600) -> CatBoostRegressor:
-    return CatBoostRegressor(
-        iterations=iterations,
-        depth=8,
-        learning_rate=0.08,
-        loss_function="MAE",
-        eval_metric="MAE",
-        l2_leaf_reg=8,
-        random_seed=seed,
-        thread_count=-1,
-        allow_writing_files=False,
-        verbose=False,
-        od_type="Iter",
-        od_wait=80,
-    )
 
 
 def _positive_probability(model, features: pd.DataFrame) -> np.ndarray:
@@ -329,8 +311,9 @@ def _select_business_threshold(
             strategy = "fallback_target_alert_coverage"
             fallback_reason = (
                 "Aucun seuil ne satisfait simultanément la précision, le rappel "
-                "et la couverture attendus. Le seuil de repli cible le centre de la "
-                "plage métier, soit 7,5 % d'alertes sur la validation."
+                "et la couverture attendus. Le seuil de repli cible le centre de "
+                f"la plage métier, soit {coverage_center:.1%} d'alertes sur la "
+                "validation."
             )
         else:
             selected = min(
@@ -457,7 +440,9 @@ def _business_gate(classification_metrics: dict[str, Any]) -> dict[str, Any]:
     if not checks["minimum_alert_coverage"]:
         violations.append("Moins de 5 % des vols déclenchent une alerte.")
     if not checks["maximum_alert_coverage"]:
-        violations.append("Plus de 10 % des vols déclenchent une alerte.")
+        violations.append(
+            f"Plus de {BUSINESS_MAX_ALERT_COVERAGE:.0%} des vols déclenchent une alerte."
+        )
     if not checks["minimum_alert_count"]:
         violations.append(
             "Moins de 500 alertes sont disponibles pour valider la fiabilité."
@@ -504,17 +489,8 @@ def _monthly_classification_metrics(
     return monthly_metrics, monthly_gates
 
 
-def _regression_metrics(target: np.ndarray, prediction: np.ndarray) -> dict[str, Any]:
-    return {
-        "sample_count": int(len(target)),
-        "mae": float(mean_absolute_error(target, prediction)),
-        "rmse": float(mean_squared_error(target, prediction) ** 0.5),
-        "r2": float(r2_score(target, prediction)),
-    }
-
-
 def _data_summary(data: pd.DataFrame) -> dict[str, Any]:
-    delayed = data["is_delayed_15"].to_numpy(dtype=np.int8)
+    delayed = data["is_delayed"].to_numpy(dtype=np.int8)
     return {
         "row_count": int(len(data)),
         "delayed_count": int(delayed.sum()),
@@ -540,13 +516,9 @@ def _classification_baselines(target: np.ndarray) -> dict[str, Any]:
 
 
 def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.DataFrame]:
-    """Entraîne les trois familles de modèles et calcule leurs métriques."""
+    """Entraîne le classifieur binaire et calcule ses métriques."""
 
     split = split_temporally(data)
-    train_features = _model_features(split.train)
-    tuning_features = _model_features(split.tuning)
-    validation_features = _model_features(split.validation)
-    test_features = _model_features(split.test)
     train_classification_features = _model_features(
         split.train, DELAY_CLASSIFICATION_FEATURES
     )
@@ -560,12 +532,12 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
         split.test, DELAY_CLASSIFICATION_FEATURES
     )
 
-    train_delay_target = split.train["is_delayed_15"].to_numpy(dtype=np.int8)
-    tuning_delay_target = split.tuning["is_delayed_15"].to_numpy(dtype=np.int8)
-    validation_delay_target = split.validation["is_delayed_15"].to_numpy(
+    train_delay_target = split.train["is_delayed"].to_numpy(dtype=np.int8)
+    tuning_delay_target = split.tuning["is_delayed"].to_numpy(dtype=np.int8)
+    validation_delay_target = split.validation["is_delayed"].to_numpy(
         dtype=np.int8
     )
-    test_delay_target = split.test["is_delayed_15"].to_numpy(dtype=np.int8)
+    test_delay_target = split.test["is_delayed"].to_numpy(dtype=np.int8)
 
     delay_classifier = _fit_binary_classifier(
         train_classification_features,
@@ -585,95 +557,6 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
     test_delay_probability = _positive_probability(
         delay_classifier, test_classification_features
     )
-
-    delayed_train_mask = train_delay_target == 1
-    delayed_tuning_mask = tuning_delay_target == 1
-    delayed_validation_mask = validation_delay_target == 1
-    delayed_test_mask = test_delay_target == 1
-    train_delay_minutes = split.train.loc[
-        delayed_train_mask, "delay_minutes"
-    ].to_numpy(dtype=float)
-    tuning_delay_minutes = split.tuning.loc[
-        delayed_tuning_mask, "delay_minutes"
-    ].to_numpy(dtype=float)
-    test_delay_minutes = split.test.loc[
-        delayed_test_mask, "delay_minutes"
-    ].to_numpy(dtype=float)
-
-    delay_regressor = _new_regressor(seed)
-    delay_regressor.fit(
-        train_features.loc[delayed_train_mask],
-        train_delay_minutes,
-        cat_features=CATEGORICAL_FEATURES,
-        eval_set=(
-            tuning_features.loc[delayed_tuning_mask],
-            tuning_delay_minutes,
-        ),
-        use_best_model=True,
-    )
-    best_regression_iterations = max(1, int(delay_regressor.tree_count_))
-    combined_delayed_features = pd.concat(
-        [
-            train_features.loc[delayed_train_mask],
-            tuning_features.loc[delayed_tuning_mask],
-        ],
-        ignore_index=True,
-    )
-    combined_delay_minutes = np.concatenate(
-        [train_delay_minutes, tuning_delay_minutes]
-    )
-    delay_regressor = _new_regressor(seed, iterations=best_regression_iterations)
-    delay_regressor.fit(
-        combined_delayed_features,
-        combined_delay_minutes,
-        cat_features=CATEGORICAL_FEATURES,
-    )
-    predicted_delay_minutes = np.clip(
-        delay_regressor.predict(test_features.loc[delayed_test_mask]),
-        15.0,
-        float(MAX_PREDICTED_DELAY_MINUTES),
-    )
-    train_delay_median = float(np.median(train_delay_minutes))
-    baseline_delay_prediction = np.full_like(test_delay_minutes, train_delay_median)
-
-    reason_classifiers = {}
-    reason_thresholds = {}
-    reason_metrics = {}
-    for offset, (reason, target_column) in enumerate(REASON_TARGETS.items(), start=1):
-        train_target = split.train.loc[
-            delayed_train_mask, target_column
-        ].to_numpy(dtype=np.int8)
-        tuning_target = split.tuning.loc[
-            delayed_tuning_mask, target_column
-        ].to_numpy(dtype=np.int8)
-        validation_target = split.validation.loc[
-            delayed_validation_mask, target_column
-        ].to_numpy(dtype=np.int8)
-        test_target = split.test.loc[
-            delayed_test_mask, target_column
-        ].to_numpy(dtype=np.int8)
-        model = _fit_binary_classifier(
-            train_features.loc[delayed_train_mask],
-            train_target,
-            tuning_features.loc[delayed_tuning_mask],
-            tuning_target,
-            seed + offset,
-        )
-        validation_probability = _positive_probability(
-            model, validation_features.loc[delayed_validation_mask]
-        )
-        threshold = _best_f1_threshold(validation_target, validation_probability)
-        test_probability = _positive_probability(
-            model, test_features.loc[delayed_test_mask]
-        )
-        reason_classifiers[reason] = model
-        reason_thresholds[reason] = threshold
-        reason_metrics[reason] = {
-            "validation": _classification_metrics(
-                validation_target, validation_probability, threshold
-            ),
-            "test": _classification_metrics(test_target, test_probability, threshold),
-        }
 
     if isinstance(delay_classifier, CatBoostClassifier):
         importances = delay_classifier.get_feature_importance()
@@ -736,6 +619,8 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
     f1_threshold = threshold_selection["f1_threshold"]
 
     metrics = {
+        "artifact_version": 6,
+        "target_definition": TARGET_DEFINITION.copy(),
         "data": {
             "all": _data_summary(data),
             "train": _data_summary(split.train),
@@ -764,21 +649,12 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
             },
             "test_baselines": _classification_baselines(test_delay_target),
         },
-        "delay_regression": {
-            "test": _regression_metrics(
-                test_delay_minutes, predicted_delay_minutes
-            ),
-            "median_baseline_test": _regression_metrics(
-                test_delay_minutes, baseline_delay_prediction
-            ),
-            "training_target_median": train_delay_median,
-        },
-        "reasons": reason_metrics,
     }
 
     bundle = {
-        "artifact_version": 5,
+        "artifact_version": 6,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "target_definition": TARGET_DEFINITION.copy(),
         "delay_classifier": delay_classifier,
         "delay_threshold": delay_threshold,
         "delay_threshold_strategy": threshold_selection["strategy"],
@@ -788,18 +664,12 @@ def train_models(data: pd.DataFrame, seed: int = 42) -> tuple[dict, dict, pd.Dat
             "status": "ready" if business_gate["passed"] else "not_ready",
             "violations": business_gate["violations"],
         },
-        "delay_regressor": delay_regressor,
-        "reason_classifiers": reason_classifiers,
-        "reason_thresholds": reason_thresholds,
         "feature_columns": FEATURE_COLUMNS,
         "delay_feature_columns": DELAY_CLASSIFICATION_FEATURES,
-        "regression_feature_columns": FEATURE_COLUMNS,
-        "reason_feature_columns": FEATURE_COLUMNS,
         "categorical_features": CATEGORICAL_FEATURES,
         "history_profiles": build_history_profiles(data),
         "schedule_profiles": build_schedule_profiles(data),
         "history_cutoff_date": str(data["flight_date"].max()),
-        "reason_targets": REASON_TARGETS,
         "versions": {
             "python": platform.python_version(),
             "catboost": catboost.__version__,
@@ -840,17 +710,19 @@ def save_training_outputs(
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Entraîne les modèles Python de prédiction des retards."
+        description="Entraîne le modèle Python de prédiction des retards."
     )
     parser.add_argument("--input", default="data/flight_data_2024.csv")
     parser.add_argument("--sample-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--model-output", default="models/flight_delay_models.joblib"
+        "--model-output", default="models/official/flight_delay_models.joblib"
     )
-    parser.add_argument("--metrics-output", default="models/training_metrics.json")
     parser.add_argument(
-        "--importance-output", default="models/feature_importance.csv"
+        "--metrics-output", default="models/official/training_metrics.json"
+    )
+    parser.add_argument(
+        "--importance-output", default="models/official/feature_importance.csv"
     )
     return parser
 
@@ -874,7 +746,6 @@ def main() -> None:
     )
     classification = metrics["delay_classification"]["test"]
     business_gate = metrics["delay_classification"]["business_gate"]
-    regression = metrics["delay_regression"]["test"]
     print(
         "Classification test — "
         f"précision : {classification['precision']:.3f}, "
@@ -887,12 +758,7 @@ def main() -> None:
         "Validation métier — "
         + ("réussie." if business_gate["passed"] else "échouée : modèle non publiable.")
     )
-    print(
-        "Régression conditionnelle test — "
-        f"MAE : {regression['mae']:.1f} min, "
-        f"RMSE : {regression['rmse']:.1f} min."
-    )
-    print(f"Modèles sauvegardés dans {arguments.model_output}.")
+    print(f"Modèle sauvegardé dans {arguments.model_output}.")
 
 
 if __name__ == "__main__":
