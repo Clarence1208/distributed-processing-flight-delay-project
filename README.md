@@ -81,7 +81,8 @@ Le parcours complet se trouve dans le
 - tableaux des indicateurs, valeurs manquantes, causes et corrélations ;
 - graphiques sur les mois, compagnies, aéroports, statuts et retards ;
 - explorateur interactif des 10 000 vols avec filtres ;
-- mode ML de démonstration rapide ou mode complet configurable ;
+- entraînement ML actif sur 10 % du CSV complet, avec mode démonstration
+  configurable ;
 - métriques, matrice de confusion et importance des features ;
 - formulaire modifiable pour prédire un futur vol.
 
@@ -230,11 +231,12 @@ Spark.
 uv run --extra notebook jupyter lab notebooks/flight_delay_pipeline.ipynb
 ```
 
-Dans JupyterLab, utiliser **Run → Run All Cells**. Le mode par défaut exécute les
-quatre étapes sur le CSV versionné de 10 000 lignes. Pour le modèle complet,
-placer le grand CSV dans `data/` puis définir `USE_FULL_ML_DATA = True` dans la
-cellule de configuration. Le notebook versionné contient déjà les derniers
-tableaux et graphiques exécutés ; les widgets nécessitent toutefois JupyterLab.
+Dans JupyterLab, utiliser **Run → Run All Cells**. Les étapes Spark utilisent les
+10 000 lignes versionnées et l'étape ML utilise actuellement 10 % du CSV complet,
+soit 696 596 vols achevés. Le grand CSV doit donc être placé dans `data/`. Pour
+un essai rapide sans ce fichier, définir `USE_FULL_ML_DATA = False`. Le notebook
+versionné contient déjà les derniers tableaux et graphiques exécutés ; les
+widgets nécessitent toutefois JupyterLab.
 
 ## Exécution en ligne de commande
 
@@ -286,7 +288,8 @@ models/
 ├── flight_delay_models.joblib
 ├── training_metrics.json
 ├── feature_importance.csv
-└── notebook_demo/               # artefacts rapides produits par le notebook
+├── official/                    # modèle notebook entraîné sur 10 % du CSV complet
+└── notebook_demo/               # modèle notebook entraîné sur le petit CSV
 ```
 
 Ces dossiers sont ignorés par Git et peuvent être supprimés puis régénérés.

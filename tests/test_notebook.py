@@ -38,6 +38,8 @@ def test_notebook_reuses_the_tested_pipeline() -> None:
     assert "train_models" in code
     assert "predict_flight" in code
     assert "SPARK_SAMPLE_SIZE = 10_000" in code
+    assert "USE_FULL_ML_DATA = True" in code
+    assert "ML_SAMPLE_FRACTION = 0.1 if USE_FULL_ML_DATA else 1.0" in code
 
 
 def test_notebook_code_cells_have_valid_python_syntax() -> None:
