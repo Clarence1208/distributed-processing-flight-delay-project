@@ -28,7 +28,8 @@ les rapports, le notebook et l'interface sont en français.
 Le parcours pédagogique complet se trouve dans le
 [notebook principal](notebooks/flight_delay_pipeline.ipynb). Les interprétations
 détaillées sont disponibles dans le [rapport Spark](reports/spark_analysis.md)
-et le [rapport du modèle](reports/ml_training_report.md).
+et le [rapport du modèle](reports/ml_training_report.md). Pour préparer la
+présentation, consulter la [fiche de soutenance](reports/soutenance.md).
 
 ## Résultats actuels
 
@@ -169,7 +170,8 @@ l'interface explique comment réentraîner le modèle au lieu de planter.
 │   └── flight_delay_pipeline.ipynb
 ├── reports/
 │   ├── spark_analysis.md
-│   └── ml_training_report.md
+│   ├── ml_training_report.md
+│   └── soutenance.md
 ├── models/official/
 │   └── flight_delay_models.joblib          # artefact v6 utilisable par Streamlit
 ├── scripts/
